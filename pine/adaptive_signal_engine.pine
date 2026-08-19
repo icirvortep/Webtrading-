@@ -1,0 +1,167 @@
+//@version=5
+// =============================================================================
+//  Adaptive Signal Engine — generátor signálů pro Adaptive Trading Bot
+//
+//  Co dělá:
+//    * detekuje režim trhu (trend / range / volatilní) stejnou logikou
+//      jako Python část bota (ADX + EMA + ATR),
+//    * v trendu obchoduje pullback ke střední EMA, v rangi mean-reversion
+//      od Bollingerových pásem,
+//    * do alertu posílá JSON včetně confidence, ATR a navrženého SL —
+//      finální rozhodnutí o velikosti a TP dělá bot na serveru.
+//
+//  Nastavení alertu v TradingView:
+//    1. Přidej indikátor na graf, nastav timeframe (doporučeno 15m/1h).
+//    2. Alert → Condition: tento indikátor → "Any alert() function call".
+//    3. Webhook URL: https://tvuj-server/webhook/tradingview
+//    4. Message nech prázdnou (JSON posílá alert() ve skriptu).
+// =============================================================================
+indicator("Adaptive Signal Engine", shorttitle="ASE", overlay=true)
+
+// ---------------------------- Vstupy ----------------------------------------
+grpCore   = "Jádro"
+emaFastLen  = input.int(21,  "EMA rychlá",   minval=2,  group=grpCore)
+emaSlowLen  = input.int(55,  "EMA pomalá",   minval=5,  group=grpCore)
+emaTrendLen = input.int(200, "EMA trendová", minval=20, group=grpCore)
+atrLen      = input.int(14,  "ATR perioda",  minval=2,  group=grpCore)
+adxLen      = input.int(14,  "ADX perioda",  minval=2,  group=grpCore)
+rsiLen      = input.int(14,  "RSI perioda",  minval=2,  group=grpCore)
+bbLen       = input.int(20,  "BB perioda",   minval=5,  group=grpCore)
+bbMult      = input.float(2.0, "BB násobek", step=0.1,  group=grpCore)
+
+grpRegime = "Režimy"
+adxTrend  = input.float(23.0, "ADX práh trendu", step=0.5, group=grpRegime)
+adxRange  = input.float(18.0, "ADX práh range",  step=0.5, group=grpRegime)
+volAtrPct = input.float(3.0,  "ATR %% = volatilní režim", step=0.1, group=grpRegime)
+
+grpRisk = "Riziko / signál"
+slAtrMultTrend = input.float(2.0, "SL ATR × (trend)", step=0.1, group=grpRisk)
+slAtrMultRange = input.float(1.2, "SL ATR × (range)", step=0.1, group=grpRisk)
+minConfidence  = input.float(0.5, "Minimální confidence", minval=0, maxval=1, step=0.05, group=grpRisk)
+useHtf         = input.bool(true, "Potvrzení vyšším timeframem", group=grpRisk)
+htfMultiplier  = input.int(4, "Násobek vyššího TF", minval=2, group=grpRisk)
+
+grpAlert = "Alert"
+secret     = input.string("", "Webhook secret (shodný s WEBHOOK_SECRET)", group=grpAlert)
+riskMult   = input.float(1.0, "Násobek rizika", minval=0, maxval=2, step=0.1, group=grpAlert)
+alertsOn   = input.bool(true, "Posílat alerty", group=grpAlert)
+
+// ---------------------------- Indikátory ------------------------------------
+emaFast  = ta.ema(close, emaFastLen)
+emaSlow  = ta.ema(close, emaSlowLen)
+emaTrend = ta.ema(close, emaTrendLen)
+atr      = ta.atr(atrLen)
+atrPct   = atr / close * 100.0
+rsi      = ta.rsi(close, rsiLen)
+[diPlus, diMinus, adx] = ta.dmi(adxLen, adxLen)
+bbBasis  = ta.sma(close, bbLen)
+bbDev    = bbMult * ta.stdev(close, bbLen)
+bbUpper  = bbBasis + bbDev
+bbLower  = bbBasis - bbDev
+volZ     = (volume - ta.sma(volume, 20)) / math.max(ta.stdev(volume, 20), 1e-9)
+
+// Vyšší timeframe pro potvrzení směru
+htfPeriod = timeframe.multiplier * htfMultiplier
+htfTf     = timeframe.isminutes ? str.tostring(htfPeriod) : timeframe.period
+htfFast   = request.security(syminfo.tickerid, htfTf, ta.ema(close, emaFastLen), lookahead=barmerge.lookahead_off)
+htfSlow   = request.security(syminfo.tickerid, htfTf, ta.ema(close, emaSlowLen), lookahead=barmerge.lookahead_off)
+htfBias   = not useHtf ? 0 : htfFast > htfSlow ? 1 : htfFast < htfSlow ? -1 : 0
+
+// ---------------------------- Detekce režimu --------------------------------
+isVolatile = atrPct >= volAtrPct
+isTrend    = adx >= adxTrend and not isVolatile
+isRange    = adx <= adxRange and not isVolatile
+trendUp    = isTrend and emaFast > emaSlow and diPlus >= diMinus
+trendDown  = isTrend and emaFast < emaSlow and diMinus >= diPlus
+
+regime = isVolatile ? "volatile" : trendUp ? "trend_up" : trendDown ? "trend_down" : isRange ? "range" : "quiet"
+
+// ---------------------------- Logika vstupů ---------------------------------
+// TREND: vstup na pullbacku k rychlé EMA po jejím opětovném respektování.
+pullbackLong  = trendUp   and low <= emaFast and close > emaFast and close > emaTrend
+pullbackShort = trendDown and high >= emaFast and close < emaFast and close < emaTrend
+
+// RANGE: mean reversion od krajů Bollingera s potvrzením RSI.
+rangeLong  = isRange and close <= bbLower and rsi < 35 and close > close[1]
+rangeShort = isRange and close >= bbUpper and rsi > 65 and close < close[1]
+
+// Průraz po kompresi volatility (BB squeeze) — funguje v obou režimech.
+bbWidth   = (bbUpper - bbLower) / bbBasis * 100.0
+squeeze   = bbWidth < ta.sma(bbWidth, 50) * 0.7
+breakLong  = squeeze[1] and close > ta.highest(high, 20)[1] and volZ > 0.5
+breakShort = squeeze[1] and close < ta.lowest(low, 20)[1]  and volZ > 0.5
+
+longRaw  = pullbackLong  or rangeLong  or breakLong
+shortRaw = pullbackShort or rangeShort or breakShort
+
+// ---------------------------- Confidence 0..1 -------------------------------
+// Skládá se ze čtyř složek se stejnou vahou jako v Python enginu.
+f_conf(isLong) =>
+    cAdx    = math.min(math.max((adx - 10.0) / 30.0, 0.0), 1.0)
+    cHtf    = htfBias == 0 ? 0.5 : (htfBias > 0) == isLong ? 1.0 : 0.0
+    cRsi    = isLong ? (rsi > 35 and rsi < 72 ? 1.0 : 0.4) : (rsi > 28 and rsi < 65 ? 1.0 : 0.4)
+    cVol    = math.min(math.max(0.5 + volZ / 4.0, 0.0), 1.0)
+    0.3 * cAdx + 0.3 * cHtf + 0.2 * cRsi + 0.2 * cVol
+
+confLong  = f_conf(true)
+confShort = f_conf(false)
+
+slMult   = isRange ? slAtrMultRange : slAtrMultTrend
+slLong   = close - atr * slMult
+slShort  = close + atr * slMult
+
+longSignal  = longRaw  and confLong  >= minConfidence
+shortSignal = shortRaw and confShort >= minConfidence
+
+// ---------------------------- JSON pro webhook ------------------------------
+f_json(side, sl, conf) =>
+    '{"secret":"' + secret + '"' +
+      ',"action":"' + side + '"' +
+      ',"symbol":"' + syminfo.ticker + '"' +
+      ',"exchange":"' + syminfo.prefix + '"' +
+      ',"timeframe":"' + timeframe.period + '"' +
+      ',"price":' + str.tostring(close, "#.##########") +
+      ',"sl":' + str.tostring(sl, "#.##########") +
+      ',"atr":' + str.tostring(atr, "#.##########") +
+      ',"confidence":' + str.tostring(conf, "#.###") +
+      ',"regime":"' + regime + '"' +
+      ',"risk_multiplier":' + str.tostring(riskMult, "#.##") +
+      ',"strategy":"adaptive_signal_engine"' +
+      ',"id":"' + str.tostring(time) + syminfo.ticker + side + '"' +
+    '}'
+
+if alertsOn and barstate.isconfirmed
+    if longSignal
+        alert(f_json("buy", slLong, confLong), alert.freq_once_per_bar_close)
+    if shortSignal
+        alert(f_json("sell", slShort, confShort), alert.freq_once_per_bar_close)
+
+// ---------------------------- Vizualizace -----------------------------------
+plot(emaFast,  "EMA rychlá",   color=color.new(color.aqua,   0), linewidth=1)
+plot(emaSlow,  "EMA pomalá",   color=color.new(color.orange, 0), linewidth=1)
+plot(emaTrend, "EMA trendová", color=color.new(color.gray,  40), linewidth=2)
+plot(bbUpper, "BB horní", color=color.new(color.purple, 60))
+plot(bbLower, "BB dolní", color=color.new(color.purple, 60))
+
+bgcolor(regime == "trend_up"   ? color.new(color.green,  92) :
+        regime == "trend_down" ? color.new(color.red,    92) :
+        regime == "volatile"   ? color.new(color.orange, 92) :
+        regime == "range"      ? color.new(color.blue,   94) : na)
+
+plotshape(longSignal,  "LONG",  shape.triangleup,   location.belowbar, color.new(color.green, 0), size=size.small)
+plotshape(shortSignal, "SHORT", shape.triangledown, location.abovebar, color.new(color.red,   0), size=size.small)
+
+var table info = table.new(position.top_right, 2, 6, border_width=1)
+if barstate.islast
+    table.cell(info, 0, 0, "Režim",      bgcolor=color.new(color.gray, 80))
+    table.cell(info, 1, 0, regime)
+    table.cell(info, 0, 1, "ADX")
+    table.cell(info, 1, 1, str.tostring(adx, "#.0"))
+    table.cell(info, 0, 2, "ATR %")
+    table.cell(info, 1, 2, str.tostring(atrPct, "#.00"))
+    table.cell(info, 0, 3, "RSI")
+    table.cell(info, 1, 3, str.tostring(rsi, "#.0"))
+    table.cell(info, 0, 4, "HTF")
+    table.cell(info, 1, 4, htfBias > 0 ? "▲ long" : htfBias < 0 ? "▼ short" : "– neutrál")
+    table.cell(info, 0, 5, "Conf L/S")
+    table.cell(info, 1, 5, str.tostring(confLong, "#.00") + " / " + str.tostring(confShort, "#.00"))

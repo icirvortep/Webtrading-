@@ -1,0 +1,286 @@
+# Adaptive Trading Bot
+
+Automatický obchodní systém napojený na **TradingView**. Alerty z TradingView chodí
+webhookem na tvůj server, bot je vyhodnotí vlastní adaptivní logikou, spočítá
+velikost pozice podle **rizika 2 % majetku na obchod**, nastaví SL i stupňovité TP
+podle aktuálního režimu trhu a odešle příkazy na burzu s pákovým obchodováním.
+
+> **Než začneš:** obchodování s pákou je vysoce rizikové a většina retailových
+> účtů na něm dlouhodobě prodělá. Bot může snížit chyby z emocí a udržet
+> disciplínu v řízení rizika, ale **nedokáže zaručit zisk**. Výchozí nastavení je
+> `paper` (simulace) — do živého režimu přepni až po týdnech testování na testnetu.
+
+---
+
+## Co bot umí
+
+| Oblast | Co je hotové |
+|---|---|
+| **Vstup signálů** | TradingView webhook (JSON i prostý text), HMAC-SHA256 podpis, IP allowlist, deduplikace |
+| **Adaptace na trh** | Detekce režimu (trend / range / volatilní / klidný) z ADX, ATR, EMA, RSI, objemu a vyššího timeframu |
+| **Filtr kvality** | Confluence skóre 0–1 ze 6 faktorů; slabé signály se nezobchodují, silné dostanou větší size |
+| **Řízení rizika** | Fixní % equity na obchod, portfoliový strop, denní stop-loss, cooldowny, kill switch |
+| **SL / TP** | SL z násobku ATR podle režimu, TP jako ladder v násobcích R, breakeven po TP1, ATR trailing po TP2 |
+| **Páka** | Dopočítaná z potřeby marže, omezená konfigurací, burzou i odstupem likvidace od SL |
+| **Exekuce** | CCXT (10+ burz), SL/TP přímo na burze, automatické uzavření pozice, pokud SL nelze umístit |
+| **Učení** | Riziko se posouvá podle historické expektance v daném režimu (SQLite historie) |
+| **Provoz** | Paper broker, backtest, REST status endpointy, Telegram notifikace, Docker, 120 testů |
+
+---
+
+## Rychlý start (5 minut, bez rizika)
+
+```bash
+git clone <tvůj-repozitář> && cd Webtrading-
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+cp .env.example .env            # klíče můžeš zatím nechat prázdné
+
+export PYTHONPATH=src
+python -m atb venues                          # přehled burz a jejich páky
+python -m atb analyze BTC/USDT:USDT            # rozbor trhu: režim, skóre, návrh SL/TP
+python -m atb backtest BTC/USDT:USDT --limit 1500
+python -m atb run                              # webhook server v paper režimu
+pytest                                         # 120 testů
+```
+
+Server pak poslouchá na `http://localhost:8080/webhook/tradingview`.
+Stav účtu a pozic: `curl localhost:8080/status`.
+
+---
+
+## Výběr burzy
+
+`python -m atb venues` vypíše aktuální katalog. Orientační stropy páky
+(mění se podle risk tier, jurisdikce a pravidel burzy — bot si skutečný
+limit vždy ověří z metadat trhu):
+
+| Burza | Max páka | Testnet | Poznámka |
+|---|---:|---|---|
+| **Bybit** ⭐ | 100x | ano | Nejlepší poměr likvidita / API / testnet — výchozí volba |
+| Binance USD-M | 125x | ano | Nejvyšší likvidita, páka klesá s velikostí pozice |
+| Bitget | 125x | ano | Nízké poplatky, demo účet |
+| OKX | 100x | ano | Vyžaduje passphrase k API klíči |
+| KuCoin Futures | 100x | ano | Pozor na velikost kontraktu |
+| BingX | 150x | ne | Vyšší páka, mělčí knihy u exotů |
+| MEXC | 200x | ne | Nejvyšší nominální páka, vyšší slippage |
+| Hyperliquid | 50x | ano | On-chain DEX, bez KYC |
+
+**Doporučení:** začni na **Bybit testnetu**. Má plnohodnotný testnet
+s reálnými daty, takže si celý řetězec TradingView → bot → burza otestuješ
+s nulovým rizikem. Nejvyšší páka není výhoda — viz sekce níže.
+
+---
+
+## Jak bot rozhoduje
+
+### 1. Signál z TradingView
+Přiložený Pine skript `pine/adaptive_signal_engine.pine` posílá JSON:
+
+```json
+{
+  "secret": "…", "action": "buy", "symbol": "BTCUSDT", "timeframe": "15",
+  "price": 65000.0, "sl": 64100.0, "confidence": 0.78, "regime": "trend_up",
+  "id": "1700000000BTCUSDTbuy"
+}
+```
+
+Fungují i jednodušší alerty (`{"action":"buy","symbol":"BTCUSDT"}`, dokonce
+i prostý text `BUY BTCUSDT 15m`) — chybějící údaje si bot dopočítá sám.
+
+### 2. Detekce režimu trhu
+Bot si stáhne svíčky ze signálního i **vyššího timeframu** (4×) a spočítá
+ATR, ADX, ±DI, EMA 21/55, RSI, šířku Bollingera a z-skóre objemu. Z toho určí režim:
+
+| Režim | Podmínka | Chování |
+|---|---|---|
+| `trend_up` / `trend_down` | ADX ≥ 23 a shoda EMA + HTF | Volnější SL (2× ATR), TP až 3.5R, trailing |
+| `range` | ADX ≤ 18 | Těsný SL (1.2× ATR), rychlé TP 0.8R a 1.5R |
+| `volatile` | ATR ≥ 3 % ceny | Široký SL (3× ATR), menší pozice (×0.6) |
+| `quiet` | ATR ≤ 0.35 % ceny | Menší pozice (×0.75), skromné cíle |
+
+### 3. Confluence skóre
+Šest vážených faktorů → jedno číslo 0–1:
+confidence z TV (20 %), soulad s režimem (25 %), potvrzení vyšším TF (20 %),
+momentum (15 %), vhodnost volatility (10 %), účast objemu (10 %).
+
+Skóre pod prahem (`min_score`, výchozí 0.45) = obchod se neotevře. Nad prahem
+skóre lineárně řídí velikost pozice (0.6× až 1.0× základního rizika).
+Navíc platí tvrdá veta: protitrendový vstup v silném trendu, RSI ≥ 85 pro long
+nebo ≤ 15 pro short.
+
+### 4. Velikost pozice — jádro celé věci
+
+```
+množství = (equity × riziko %) / |vstup − stop loss|
+```
+
+Při equity 10 000 USDT, riziku 2 % a SL 1,5 % pod vstupem:
+riskuješ 200 USDT, pozice má notional ≈ 13 333 USDT.
+
+Zásah SL tedy stojí **přesně 2 % účtu** — nezávisle na tom, jak daleko SL leží
+a jakou páku burza nabízí. Toto pravidlo hlídá test
+`test_position_size_risks_exactly_configured_percent`.
+
+Základní 2 % se dál upravují (a nikdy nepřekročí tvrdý strop `max_risk_per_trade_pct`):
+
+| Vliv | Násobek |
+|---|---|
+| Kvalita signálu (skóre) | 0.6× – 1.0× |
+| Volatilní trh / mrtvý trh | 0.6× / 0.75× |
+| Historická expektance v daném režimu | 0.4× – 1.3× |
+| Série ztrát (2., 3., 4. v řadě) | 0.75× / 0.5× / 0.5× |
+
+### 5. Páka není volba agresivity
+Páka se **dopočítá** tak, aby na pozici stačila volná marže — a pak se ořízne
+na minimum ze tří limitů: tvůj `max_leverage`, limit burzy, a páka, při níž je
+likvidační cena bezpečně (1.6×) za stop lossem. Vyšší páka sama o sobě
+nezvyšuje ztrátu při zásahu SL; zvyšuje jen kapitálovou efektivitu a riziko,
+že tě dřív než SL trefí likvidace. Proto ji bot drží co nejnižší.
+
+### 6. Výstupy
+* **SL** = násobek ATR podle režimu, posunutý za nejbližší swing, s clampem 0.25 %–8 %.
+* **TP ladder** v násobcích R, po částech (např. 40 % / 35 % / 25 % pozice).
+* **Breakeven** po dosažení TP1 (včetně offsetu na poplatky).
+* **ATR trailing** po TP2, stop se posouvá jen ve prospěch obchodu.
+* **Časový stop** (volitelně) při překročení maximální doby držení.
+* SL/TP leží **přímo na burze**, takže chrání pozici i při výpadku bota.
+  Pokud se SL nepodaří umístit, bot pozici okamžitě zavře.
+
+---
+
+## Nastavení TradingView
+
+1. **Přidej Pine skript**: TradingView → Pine Editor → vlož obsah
+   `pine/adaptive_signal_engine.pine` → *Add to chart*.
+2. Do pole „Webhook secret" vlož stejnou hodnotu jako `WEBHOOK_SECRET` v `.env`.
+3. **Vytvoř alert**: Condition = *Adaptive Signal Engine* → *Any alert() function call*,
+   Options = *Once Per Bar Close*.
+4. **Notifications → Webhook URL**: `https://tvuj-server/webhook/tradingview`
+   (message nech prázdnou, JSON posílá skript sám).
+
+> Webhooky vyžadují placený plán TradingView (Essential a výše).
+> Endpoint musí být dostupný z internetu přes HTTPS — použij reverzní proxy
+> (Caddy/nginx) nebo tunel (Cloudflare Tunnel) a nikdy nevystavuj port přímo.
+
+Bot přijímá i alerty z tvé vlastní strategie — stačí, aby message obsahovala
+JSON s `action` a `symbol`.
+
+---
+
+## Ostrý provoz
+
+```bash
+# 1) klíče (jen obchodování futures, NIKDY oprávnění k výběru, ideálně IP whitelist)
+cp .env.example .env && nano .env
+openssl rand -hex 32          # → WEBHOOK_SECRET
+
+# 2) týdny na testnetu
+#    config.yaml: mode: paper, exchange.testnet: true
+python -m atb run
+
+# 3) mezikrok: živé klíče, ale jen výpočet plánu bez odeslání
+#    config.yaml: mode: live, dry_run: true
+python -m atb run
+
+# 4) ostrý provoz (vyžádá si potvrzení v konzoli)
+#    config.yaml: mode: live, dry_run: false, exchange.testnet: false
+python -m atb run --live
+```
+
+Docker:
+```bash
+docker compose -f docker/docker-compose.yml up -d --build
+docker compose -f docker/docker-compose.yml logs -f
+```
+
+### Ovládání za běhu
+
+| Endpoint | Význam |
+|---|---|
+| `GET /health` | Kontrola, že bot žije |
+| `GET /status` | Equity, otevřené pozice, statistika |
+| `GET /trades?limit=20` | Otevřené a uzavřené obchody |
+| `POST /control/kill-switch?enable=true` | Okamžitě zastaví nové vstupy |
+| `POST /control/close-all` | Nouzově zavře všechny pozice |
+
+CLI: `python -m atb status`, `python -m atb close-all`, `python -m atb test-signal BTC/USDT:USDT`.
+
+---
+
+## Bezpečnostní pojistky
+
+| Pojistka | Výchozí hodnota | Co dělá |
+|---|---|---|
+| `risk_per_trade_pct` | 2 % | Maximální ztráta na jeden obchod |
+| `max_risk_per_trade_pct` | 3 % | Strop i po adaptivním navýšení |
+| `max_portfolio_risk_pct` | 6 % | Součet rizika všech otevřených pozic |
+| `max_daily_loss_pct` | 6 % | Denní stop — po překročení bot přestane vstupovat |
+| `max_daily_trades` | 20 | Ochrana proti rozbité strategii chrlící signály |
+| `max_open_positions` | 4 | Limit souběžných pozic |
+| `cooldown_after_loss_min` | 15 min | Pauza na symbolu po ztrátě |
+| `streak_cooldown_min` | 120 min | Delší pauza po 3 ztrátách v řadě |
+| `max_spread_bps` | 12 bps | Neobchoduje v nelikvidních podmínkách |
+| `signal_max_age_sec` | 90 s | Zahodí zpožděné alerty |
+| `kill_switch` | false | Tvrdé zastavení všech nových vstupů |
+
+Klíče se čtou **jen z prostředí**, nikdy z konfigurace v gitu. `.env` a `data/`
+jsou v `.gitignore`. V živém režimu je webhook secret povinný a `/docs` se vypne.
+
+---
+
+## Struktura projektu
+
+```
+src/atb/
+├── main.py               CLI (run, analyze, backtest, venues, status, close-all)
+├── trader.py             orchestrace: signál → rozhodnutí → exekuce
+├── config.py             YAML + přepisy z prostředí, validace přes pydantic
+├── models.py             doménové typy (Signal, TradePlan, Position, …)
+├── backtest.py           event-driven backtest stejnou logikou jako živý bot
+├── strategy/
+│   ├── indicators.py     EMA, ATR, ADX, RSI, Bollinger, z-skóre (čisté numpy)
+│   ├── regime.py         klasifikace režimu trhu
+│   ├── scoring.py        confluence skóre a veta
+│   ├── exits.py          SL, TP ladder, trailing, breakeven
+│   └── engine.py         spojení dat, režimu, skóre a plánu
+├── risk/manager.py       sizing, páka, limity, cooldowny, adaptace
+├── execution/router.py   odeslání příkazů, umístění SL/TP, úklid po chybě
+├── monitor/position_manager.py   trailing, breakeven, časový stop, rekonciliace
+├── exchanges/            base, ccxt_adapter, paper broker, katalog burz
+├── webhook/              parsování payloadu, HMAC, FastAPI server
+└── state/store.py        SQLite: obchody, signály, equity, statistiky režimů
+```
+
+---
+
+## Testy
+
+```bash
+pytest                      # 120 testů, běží bez sítě proti falešné burze
+pytest --cov=src/atb        # s pokrytím
+ruff check src tests        # lint
+```
+
+Testy pokrývají mimo jiné: přesnost sizingu na 2 %, stropy páky, denní
+stop-loss, cooldowny, veta protitrendových vstupů, ověření HMAC podpisu,
+IP allowlist, a to, že pozice bez stop lossu je okamžitě uzavřena.
+
+---
+
+## Co bot záměrně nedělá
+
+* **Neslibuje zisk.** Adaptace parametrů zlepšuje konzistenci řízení rizika,
+  nikoli předpověď trhu.
+* **Neobchoduje bez stop lossu.** Když SL nelze umístit, pozice se zavře.
+* **Nenavyšuje ztrátovou pozici** (žádné martingale ani průměrování dolů).
+* **Neoptimalizuje parametry na historii automaticky** — to vede k overfittingu.
+  Backtest je nástroj pro tebe, ne smyčka, která si sama přenastaví strategii.
+* **Nepočítá s daněmi ani reportingem.** Zisky z obchodování v ČR se daní;
+  historii obchodů najdeš v `data/atb.sqlite`.
+
+---
+
+## Licence
+
+MIT — používáš na vlastní riziko. Autoři nenesou odpovědnost za obchodní ztráty.
