@@ -12,7 +12,12 @@ log = logging.getLogger(__name__)
 
 def build_exchange(cfg: AppConfig, starting_equity: float = 10_000.0) -> Exchange:
     """V paper/dry-run módu nikdy nevrátí klienta schopného odeslat reálný příkaz."""
-    if cfg.live:
+    if cfg.mode == "offline":
+        from .offline import OfflineExchange
+
+        log.info("OFFLINE režim — simulovaná data, ideální pro vyzkoušení rozhraní")
+        exchange: Exchange = OfflineExchange(cfg.exchange, equity=starting_equity)
+    elif cfg.live:
         from .ccxt_adapter import CCXTExchange
 
         log.warning(

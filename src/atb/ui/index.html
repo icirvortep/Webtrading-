@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Adaptive Trading Bot</title>
+<link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">◆</span>
+    <div>
+      <div class="title">Adaptive Trading Bot</div>
+      <div class="subtitle" id="venue">načítám…</div>
+    </div>
+  </div>
+  <div class="metrics">
+    <div class="metric"><span class="label">Equity</span><strong id="equity">—</strong></div>
+    <div class="metric"><span class="label">Denní PnL</span><strong id="dailyPnl">—</strong></div>
+    <div class="metric"><span class="label">Otevřené</span><strong id="openCount">—</strong></div>
+    <div class="metric"><span class="label">Úspěšnost</span><strong id="winRate">—</strong></div>
+  </div>
+  <div class="controls">
+    <span class="pulse" id="pulse" title="Poslední aktualizace"></span>
+    <button id="btnKill" class="btn danger">STOP</button>
+    <button id="btnCloseAll" class="btn ghost">Zavřít vše</button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="live">Živý přehled</button>
+  <button class="tab" data-tab="positions">Pozice</button>
+  <button class="tab" data-tab="log">Rozhodnutí</button>
+  <button class="tab" data-tab="history">Historie</button>
+  <button class="tab" data-tab="settings">Nastavení</button>
+</nav>
+
+<main>
+  <!-- ŽIVÝ PŘEHLED -->
+  <section id="tab-live" class="panel active">
+    <div class="panel-head">
+      <h2>Co robot právě vidí</h2>
+      <div class="panel-actions">
+        <span id="scanInfo" class="muted"></span>
+        <button id="btnScan" class="btn small">Skenovat teď</button>
+      </div>
+    </div>
+    <div id="markets" class="markets"></div>
+  </section>
+
+  <!-- POZICE -->
+  <section id="tab-positions" class="panel">
+    <div class="panel-head"><h2>Otevřené pozice</h2></div>
+    <div id="positions"></div>
+  </section>
+
+  <!-- ROZHODNUTÍ -->
+  <section id="tab-log" class="panel">
+    <div class="panel-head">
+      <h2>Proč vstoupil / nevstoupil</h2>
+      <span class="muted">Každý signál a důvod rozhodnutí</span>
+    </div>
+    <div id="signals"></div>
+  </section>
+
+  <!-- HISTORIE -->
+  <section id="tab-history" class="panel">
+    <div class="panel-head"><h2>Uzavřené obchody</h2></div>
+    <div id="history"></div>
+  </section>
+
+  <!-- NASTAVENÍ -->
+  <section id="tab-settings" class="panel">
+    <div class="panel-head">
+      <h2>Nastavení</h2>
+      <div class="panel-actions">
+        <span id="saveInfo" class="muted"></span>
+        <button id="btnSave" class="btn primary">Uložit změny</button>
+      </div>
+    </div>
+    <div id="settings" class="settings"></div>
+  </section>
+</main>
+
+<script src="/ui/app.js"></script>
+</body>
+</html>

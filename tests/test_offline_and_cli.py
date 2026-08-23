@@ -18,8 +18,12 @@ def test_generated_series_has_valid_candles():
 
 
 def test_generated_series_is_deterministic():
-    assert generate_ohlcv(bars=50, seed=1) == generate_ohlcv(bars=50, seed=1)
-    assert generate_ohlcv(bars=50, seed=1) != generate_ohlcv(bars=50, seed=2)
+    """Stejný seed = stejné ceny; čas svíček připínáme, ať test není flaky."""
+    first = generate_ohlcv(bars=50, seed=1, end_ts=1_700_000_000)
+    second = generate_ohlcv(bars=50, seed=1, end_ts=1_700_000_000)
+    other = generate_ohlcv(bars=50, seed=2, end_ts=1_700_000_000)
+    assert first == second
+    assert first != other
 
 
 def test_offline_exchange_is_stable_across_instances():

@@ -18,6 +18,7 @@ from .models import Action, RejectReason, Signal
 from .monitor.position_manager import PositionManager
 from .notify import Notifier
 from .risk.manager import RiskManager
+from .scanner import MarketScanner
 from .state.store import Store
 from .strategy.engine import StrategyEngine
 
@@ -34,6 +35,7 @@ class Trader:
         self.engine = StrategyEngine(cfg, self.exchange, self.risk)
         self.router = ExecutionRouter(cfg, self.exchange, self.store, self.notifier)
         self.positions = PositionManager(cfg, self.exchange, self.store, self.router, self.notifier)
+        self.scanner = MarketScanner(cfg, self)
         self._lock = threading.Lock()
 
     # ---------- životní cyklus ----------
@@ -43,6 +45,7 @@ class Trader:
         self.store.start_of_day_equity(balance.equity)
         self.store.record_equity(balance.equity)
         self.positions.start()
+        self.scanner.start()
         log.info(
             "Trader připraven | režim=%s burza=%s equity=%.2f %s riziko/obchod=%.2f%%",
             self.cfg.mode, self.exchange.id, balance.equity, balance.currency,
@@ -56,6 +59,7 @@ class Trader:
         )
 
     def shutdown(self, close_positions: bool = False) -> None:
+        self.scanner.stop()
         self.positions.stop()
         if close_positions:
             self.router.close_all("shutdown")

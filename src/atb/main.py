@@ -15,6 +15,8 @@ import json
 import logging
 import signal
 import sys
+import threading
+import webbrowser
 from pathlib import Path
 
 from .config import AppConfig, load_config
@@ -27,18 +29,28 @@ log = logging.getLogger("atb")
 
 
 def _load_dotenv(path: str = ".env") -> None:
-    """Minimální .env loader — bez další závislosti."""
+    """Minimální .env loader — bez další závislosti.
+
+    Zvládá `KLIC=hodnota`, uvozovky i komentář na konci řádku
+    (`ATB_MODE=paper   # paper | live`). Hodnota v uvozovkách si `#` ponechá,
+    aby šla použít třeba v hesle.
+    """
     env_path = Path(path)
     if not env_path.exists():
         return
     import os
 
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]                      # uvozovky = hodnota doslova
+        else:
+            value = value.split(" #", 1)[0].split("\t#", 1)[0].strip()
+        os.environ.setdefault(key.strip(), value)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -51,6 +63,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--host", default=None)
     run.add_argument("--port", type=int, default=None)
     run.add_argument("--live", action="store_true", help="přepne do živého režimu (vyžaduje potvrzení)")
+    run.add_argument("--offline", action="store_true",
+                     help="simulovaná data — vyzkoušení rozhraní bez klíčů a bez internetu")
+    run.add_argument("--no-browser", action="store_true", help="neotvírat prohlížeč")
 
     demo = sub.add_parser("demo", help="ukázka celého toku offline — bez klíčů a bez internetu")
     demo.add_argument("--symbol", default="BTC/USDT:USDT")
@@ -129,6 +144,9 @@ def cmd_run(cfg: AppConfig, args: argparse.Namespace) -> int:
 
     from .webhook.server import create_app
 
+    if args.offline:
+        cfg.mode = "offline"
+        cfg.dry_run = False
     if args.live:
         cfg.mode = "live"
         cfg.dry_run = False
@@ -137,7 +155,7 @@ def cmd_run(cfg: AppConfig, args: argparse.Namespace) -> int:
 
     trader = Trader(cfg)
     trader.start()
-    app = create_app(cfg, trader)
+    app = create_app(cfg, trader, config_path=args.config)
 
     def _shutdown(signum, frame) -> None:
         log.info("Ukončuji (signál %s)…", signum)
@@ -149,7 +167,22 @@ def cmd_run(cfg: AppConfig, args: argparse.Namespace) -> int:
 
     host = args.host or cfg.webhook.host
     port = args.port or cfg.webhook.port
-    log.info("Webhook poslouchá na http://%s:%d%s", host, port, cfg.webhook.path)
+    if cfg.ui.bind_localhost_only and host == "0.0.0.0":
+        # rozhraní nemá přihlašování — ven ho pouštíme jen na výslovné přání
+        host = "127.0.0.1"
+
+    url = f"http://localhost:{port}/"
+    print("\n" + "=" * 60)
+    print(f"  Rozhraní běží na:  {url}")
+    print(f"  Webhook:           http://{host}:{port}{cfg.webhook.path}")
+    print(f"  Režim:             {cfg.mode.upper()}"
+          + ("  (simulovaná data)" if cfg.mode == "offline" else ""))
+    print("  Ukončíš klávesami: Ctrl+C")
+    print("=" * 60 + "\n")
+
+    if cfg.ui.enabled and not args.no_browser:
+        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+
     uvicorn.run(app, host=host, port=port, log_level=cfg.log_level.lower())
     return 0
 

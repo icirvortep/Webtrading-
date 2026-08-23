@@ -27,14 +27,19 @@ def generate_ohlcv(
     volatility: float = 0.004,
     timeframe_minutes: int = 15,
     seed: int = 42,
+    end_ts: float | None = None,
 ) -> list[list[float]]:
-    """Geometrický random walk s driftem — deterministický podle seedu."""
+    """Geometrický random walk s driftem — deterministický podle seedu.
+
+    `end_ts` umožňuje připnout čas poslední svíčky; bez něj se bere aktuální
+    čas, takže dvě volání se liší jen v časových razítkách, ne v cenách.
+    """
     rng = np.random.default_rng(seed)
     returns = drift + rng.normal(0.0, volatility, bars)
     rows: list[list[float]] = []
     price = start_price
     step_ms = timeframe_minutes * 60_000
-    ts = int(time.time() * 1000) - bars * step_ms
+    ts = int((end_ts if end_ts is not None else time.time()) * 1000) - bars * step_ms
     for i, ret in enumerate(returns):
         open_ = price
         price = max(price * (1.0 + float(ret)), 0.01)

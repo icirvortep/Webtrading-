@@ -83,3 +83,41 @@ def test_config_file_contains_no_secrets():
     for needle in ("api_key:", "api_secret:", "password:"):
         assert needle not in text
     assert os.path.exists(".env.example")
+
+
+def test_dotenv_strips_inline_comments(tmp_path, monkeypatch, clean_env):
+    """.env.example má komentáře na konci řádků — nesmí se dostat do hodnot."""
+    from atb.main import _load_dotenv
+
+    env = tmp_path / ".env"
+    env.write_text(
+        "ATB_MODE=paper          # paper | live\n"
+        "ATB_RISK_PCT=2.0\n"
+        'EXCHANGE_API_SECRET="tajne#heslo"\n'
+        "# celý řádek komentář\n"
+        "PRAZDNE=\n",
+        encoding="utf-8",
+    )
+    for key in ("ATB_MODE", "ATB_RISK_PCT", "EXCHANGE_API_SECRET", "PRAZDNE"):
+        monkeypatch.delenv(key, raising=False)
+
+    _load_dotenv(str(env))
+    assert os.environ["ATB_MODE"] == "paper"
+    assert os.environ["ATB_RISK_PCT"] == "2.0"
+    assert os.environ["EXCHANGE_API_SECRET"] == "tajne#heslo"   # uvozovky = doslova
+    assert os.environ["PRAZDNE"] == ""
+
+
+def test_shipped_env_example_loads_into_valid_config(tmp_path, monkeypatch, clean_env):
+    """Celý .env.example musí projít až do platné konfigurace."""
+    from atb.main import _load_dotenv
+
+    for key in ("ATB_MODE", "ATB_DRY_RUN", "ATB_EXCHANGE", "ATB_TESTNET",
+                "ATB_RISK_PCT", "ATB_MAX_LEVERAGE", "ATB_KILL_SWITCH",
+                "ATB_WEBHOOK_PORT", "ATB_LOG_LEVEL"):
+        monkeypatch.delenv(key, raising=False)
+    _load_dotenv(".env.example")
+    cfg = load_config("config/config.yaml")
+    assert cfg.mode == "paper"
+    assert cfg.risk.risk_per_trade_pct == 2.0
+    assert cfg.webhook.port == 8080

@@ -108,6 +108,27 @@ class ExitConfig(BaseModel):
     use_exchange_stops: bool = True        # posílat SL/TP přímo na burzu
 
 
+class ScannerConfig(BaseModel):
+    """Průběžné skenování trhu — zdroj živého přehledu i vlastních signálů."""
+
+    enabled: bool = True
+    watchlist: list[str] = Field(default_factory=lambda: [
+        "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT",
+    ])
+    timeframe: str = "15m"
+    interval_seconds: float = 20.0
+    #: autopilot = bot obchoduje z vlastních signálů, bez TradingView
+    autopilot: bool = False
+    min_trigger_strength: float = 0.5
+
+
+class UIConfig(BaseModel):
+    enabled: bool = True
+    refresh_seconds: float = 3.0
+    #: rozhraní je bez přihlášení — nechávej ho jen na localhost
+    bind_localhost_only: bool = True
+
+
 class WebhookConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8080
@@ -136,7 +157,7 @@ class NotifyConfig(BaseModel):
 
 
 class AppConfig(BaseModel):
-    mode: Literal["paper", "live"] = "paper"
+    mode: Literal["offline", "paper", "live"] = "paper"
     dry_run: bool = True
     log_level: str = "INFO"
     log_json: bool = False
@@ -147,6 +168,8 @@ class AppConfig(BaseModel):
     risk: RiskConfig = Field(default_factory=RiskConfig)
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
     exits: ExitConfig = Field(default_factory=ExitConfig)
+    scanner: ScannerConfig = Field(default_factory=ScannerConfig)
+    ui: UIConfig = Field(default_factory=UIConfig)
     webhook: WebhookConfig = Field(default_factory=WebhookConfig)
     monitor: MonitorConfig = Field(default_factory=MonitorConfig)
     notify: NotifyConfig = Field(default_factory=NotifyConfig)
@@ -167,6 +190,7 @@ _ENV_OVERRIDES: dict[str, tuple[str, ...]] = {
     "ATB_KILL_SWITCH": ("risk", "kill_switch"),
     "ATB_WEBHOOK_PORT": ("webhook", "port"),
     "ATB_DATABASE": ("database",),
+    "ATB_AUTOPILOT": ("scanner", "autopilot"),
 }
 
 _TRUTHY = {"1", "true", "yes", "on"}
@@ -207,3 +231,115 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         if raw is not None:
             _set_path(data, target, _coerce(raw))
     return AppConfig.model_validate(data)
+
+
+#: pole, která smí měnit uživatelské rozhraní (zbytek vyžaduje restart a ruční zásah)
+EDITABLE_PATHS: tuple[tuple[str, ...], ...] = (
+    ("risk", "risk_per_trade_pct"),
+    ("risk", "max_risk_per_trade_pct"),
+    ("risk", "max_portfolio_risk_pct"),
+    ("risk", "max_daily_loss_pct"),
+    ("risk", "max_daily_trades"),
+    ("risk", "max_open_positions"),
+    ("risk", "max_leverage"),
+    ("risk", "max_spread_bps"),
+    ("risk", "cooldown_after_loss_min"),
+    ("risk", "streak_cooldown_min"),
+    ("risk", "kill_switch"),
+    ("strategy", "min_score"),
+    ("strategy", "veto_counter_trend"),
+    ("strategy", "adaptive_learning"),
+    ("strategy", "adx_trend_threshold"),
+    ("strategy", "adx_range_threshold"),
+    ("strategy", "volatile_atr_pct"),
+    ("strategy", "htf_multiplier"),
+    ("exits", "sl_atr_mult"),
+    ("exits", "tp_r_multiples"),
+    ("exits", "tp_fractions"),
+    ("exits", "trail_atr_mult"),
+    ("exits", "min_sl_pct"),
+    ("exits", "max_sl_pct"),
+    ("exits", "breakeven_after_tp"),
+    ("exits", "trail_after_tp"),
+    ("exits", "max_hold_minutes"),
+    ("scanner", "watchlist"),
+    ("scanner", "timeframe"),
+    ("scanner", "interval_seconds"),
+    ("scanner", "autopilot"),
+    ("scanner", "min_trigger_strength"),
+    ("symbols_allowlist"),
+)
+
+
+def _get_path(data: Any, path: tuple[str, ...]) -> Any:
+    node = data
+    for key in path:
+        node = node[key] if isinstance(node, dict) else getattr(node, key)
+    return node
+
+
+def apply_updates(cfg: AppConfig, updates: dict[str, Any]) -> AppConfig:
+    """Vrátí novou, zvalidovanou konfiguraci s aplikovanými změnami.
+
+    `updates` je plochá mapa `"risk.risk_per_trade_pct" -> hodnota`. Měnit jde
+    jen pole z `EDITABLE_PATHS`; cokoli jiného skončí chybou, aby rozhraní
+    nemohlo přepsat například přihlašovací údaje nebo živý režim.
+    """
+    editable = {".".join(p) if isinstance(p, tuple) else p for p in EDITABLE_PATHS}
+    data = cfg.model_dump()
+    for dotted, value in updates.items():
+        if dotted not in editable:
+            raise ValueError(f"pole '{dotted}' nelze měnit z rozhraní")
+        _set_path(data, tuple(dotted.split(".")), value)
+    return AppConfig.model_validate(data)
+
+
+def apply_updates_inplace(cfg: AppConfig, updates: dict[str, Any]) -> AppConfig:
+    """Zvaliduje změny a promítne je do *živého* objektu konfigurace.
+
+    Trader, risk manager i skener drží referenci na tentýž `AppConfig`, takže
+    nová hodnota se projeví okamžitě bez restartu — proto se nevrací kopie,
+    ale mění se existující instance.
+    """
+    validated = apply_updates(cfg, updates)
+    for dotted in updates:
+        path = tuple(dotted.split("."))
+        target = cfg
+        for key in path[:-1]:
+            target = getattr(target, key)
+        setattr(target, path[-1], _get_path(validated, path))
+    return cfg
+
+
+def persist_updates(updates: dict[str, Any], path: str | Path | None = None) -> Path:
+    """Zapíše změny do YAML souboru — a nic jiného.
+
+    Ukládá se *soubor na disku* s aplikovanými změnami, ne běžící konfigurace.
+    Kdyby se dumpoval živý objekt, uložily by se do něj i dočasné přepínače
+    z příkazové řádky a prostředí (``--offline``, ``--live``, ``ATB_DATABASE``)
+    a uživatel by je měl natrvalo v souboru, aniž by o to požádal.
+    """
+    cfg_path = Path(path) if path else DEFAULT_CONFIG_PATH
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+
+    data: dict[str, Any] = {}
+    if cfg_path.exists():
+        data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+
+    editable = {".".join(p) if isinstance(p, tuple) else p for p in EDITABLE_PATHS}
+    for dotted, value in updates.items():
+        if dotted not in editable:
+            raise ValueError(f"pole '{dotted}' nelze měnit z rozhraní")
+        _set_path(data, tuple(dotted.split(".")), value)
+
+    # kontrola, že výsledek dává smysl, ať na disku nikdy neskončí rozbitý soubor
+    AppConfig.model_validate(data)
+
+    header = (
+        "# Konfigurace Adaptive Trading Bota.\n"
+        "# Tenhle soubor přepisuje i webové rozhraní, takže se z něj při uložení\n"
+        "# ztratí komentáře. Okomentovaný vzor všech voleb je v config.example.yaml.\n"
+    )
+    body = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+    cfg_path.write_text(header + body, encoding="utf-8")
+    return cfg_path

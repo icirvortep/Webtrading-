@@ -105,6 +105,21 @@ class FakeExchange(Exchange):
 
 
 @pytest.fixture()
+def clean_env():
+    """Vrátí proměnné prostředí do původního stavu.
+
+    `_load_dotenv` zapisuje přímo do os.environ; bez tohohle by nastavení
+    z jednoho testu prosáklo do dalších (a přepsalo jim konfiguraci).
+    """
+    import os
+
+    snapshot = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(snapshot)
+
+
+@pytest.fixture()
 def config() -> AppConfig:
     return AppConfig.model_validate({
         "mode": "paper",

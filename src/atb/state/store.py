@@ -102,6 +102,15 @@ class Store:
             )
             self._conn.commit()
 
+    def recent_signals(self, limit: int = 30) -> list[dict[str, Any]]:
+        """Poslední rozhodnutí bota — přijaté i zamítnuté, s důvodem."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, ts, symbol, action, side, accepted, reason, score, regime "
+                "FROM signals ORDER BY ts DESC LIMIT ?", (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def seen_signal(self, signal_id: str) -> bool:
         with self._lock:
             row = self._conn.execute("SELECT 1 FROM signals WHERE id = ?", (signal_id,)).fetchone()

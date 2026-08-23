@@ -10,19 +10,23 @@ from __future__ import annotations
 
 import logging
 import os
+import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, Header, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
-from ..config import AppConfig
+from ..config import EDITABLE_PATHS, AppConfig, apply_updates_inplace, persist_updates
 from ..trader import Trader
 from . import payload as payload_mod
 
 log = logging.getLogger(__name__)
 
+UI_DIR = Path(__file__).resolve().parent.parent / "ui"
 
-def create_app(cfg: AppConfig, trader: Trader) -> FastAPI:
+
+def create_app(cfg: AppConfig, trader: Trader, config_path: str | None = None) -> FastAPI:
     app = FastAPI(
         title="Adaptive Trading Bot",
         description="TradingView webhook → adaptivní strategie → burza",
@@ -51,6 +55,49 @@ def create_app(cfg: AppConfig, trader: Trader) -> FastAPI:
             "open": trader.store.open_trades(),
             "closed": trader.store.recent_closed(min(limit, 200)),
         }
+
+    # ---------------- API pro webové rozhraní ----------------
+
+    @router.get("/api/state")
+    def api_state() -> dict[str, Any]:
+        """Vše, co rozhraní potřebuje, v jednom dotazu."""
+        return {
+            "ts": time.time(),
+            "account": trader.status(),
+            "scanner": trader.scanner.state(),
+            "signals": trader.store.recent_signals(30),
+            "trades": {
+                "open": trader.store.open_trades(),
+                "closed": trader.store.recent_closed(30),
+            },
+            "settings": _settings_payload(cfg),
+        }
+
+    @router.get("/api/settings")
+    def api_get_settings() -> dict[str, Any]:
+        return _settings_payload(cfg)
+
+    @router.put("/api/settings")
+    def api_put_settings(updates: dict[str, Any]) -> dict[str, Any]:
+        try:
+            apply_updates_inplace(cfg, updates)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except Exception as exc:  # pydantic ValidationError a spol.
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        path = persist_updates(updates, config_path)
+        log.info("Nastavení změněno z rozhraní: %s", ", ".join(sorted(updates)))
+        return {"saved_to": str(path), "settings": _settings_payload(cfg)}
+
+    @router.post("/api/scan")
+    def api_scan() -> dict[str, Any]:
+        trader.scanner.scan_once()
+        return trader.scanner.state()
+
+    @router.post("/api/close/{symbol:path}")
+    def api_close(symbol: str) -> dict[str, Any]:
+        result = trader.router.close(symbol, "ui")
+        return {"ok": result.ok, "error": result.error}
 
     @router.post("/control/kill-switch")
     def kill_switch(enable: bool = True) -> dict[str, Any]:
@@ -109,8 +156,46 @@ def create_app(cfg: AppConfig, trader: Trader) -> FastAPI:
         code = 200 if result.get("status") not in ("error",) else 500
         return JSONResponse(result, status_code=code)
 
+    if cfg.ui.enabled:
+        index = UI_DIR / "index.html"
+
+        @router.get("/", response_class=HTMLResponse)
+        def ui_index() -> HTMLResponse:
+            return HTMLResponse(index.read_text(encoding="utf-8"))
+
+        @router.get("/ui/{filename}")
+        def ui_asset(filename: str) -> Any:
+            """Statické soubory rozhraní — jen ze složky ui, bez procházení stromu."""
+            target = (UI_DIR / filename).resolve()
+            if target.parent != UI_DIR.resolve() or not target.is_file():
+                return JSONResponse({"error": "not found"}, status_code=404)
+            media = "text/javascript" if filename.endswith(".js") else "text/css"
+            return Response(target.read_text(encoding="utf-8"), media_type=media)
+
     app.include_router(router)
     return app
+
+
+def _settings_payload(cfg: AppConfig) -> dict[str, Any]:
+    """Aktuální hodnoty editovatelných polí + kontext, který rozhraní zobrazuje."""
+    values: dict[str, Any] = {}
+    for path in EDITABLE_PATHS:
+        dotted = ".".join(path) if isinstance(path, tuple) else path
+        node: Any = cfg
+        for key in dotted.split("."):
+            node = getattr(node, key)
+        values[dotted] = node
+    return {
+        "values": values,
+        "readonly": {
+            "mode": cfg.mode,
+            "dry_run": cfg.dry_run,
+            "exchange": cfg.exchange.id,
+            "testnet": cfg.exchange.testnet,
+            "quote": cfg.exchange.quote,
+        },
+        "regimes": ["trend_up", "trend_down", "range", "volatile", "quiet"],
+    }
 
 
 def _client_ip(request: Request) -> str:

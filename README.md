@@ -24,7 +24,70 @@ podle aktuálního režimu trhu a odešle příkazy na burzu s pákovým obchodo
 | **Páka** | Dopočítaná z potřeby marže, omezená konfigurací, burzou i odstupem likvidace od SL |
 | **Exekuce** | CCXT (10+ burz), SL/TP přímo na burze, automatické uzavření pozice, pokud SL nelze umístit |
 | **Učení** | Riziko se posouvá podle historické expektance v daném režimu (SQLite historie) |
-| **Provoz** | Offline demo, paper broker, backtest, REST status endpointy, Telegram notifikace, Docker, 131 testů |
+| **Živé rozhraní** | Webový dashboard: co robot vidí, proč vstoupil, pozice, historie — a nastavení všeho za běhu |
+| **Autopilot** | Vlastní generátor signálů — funguje bez TradingView i bez veřejné adresy |
+| **Provoz** | Spouštěč pro macOS, offline režim, paper broker, backtest, Telegram notifikace, Docker, 156 testů |
+
+---
+
+## Spuštění na MacBooku
+
+**Dvojklik na `start-mac.command`** ve Finderu. Poprvé si sám vytvoří prostředí,
+nainstaluje závislosti a zeptá se na režim; pak otevře rozhraní v prohlížeči.
+
+> Při prvním spuštění může macOS hlásit „nelze otevřít, protože pochází od
+> neověřeného vývojáře". Klikni pravým → *Otevřít* → *Otevřít*, nebo v Terminálu
+> spusť `./start-mac.command`.
+
+Na výběr jsou tři režimy:
+
+| Režim | Co dělá | Potřebuje |
+|---|---|---|
+| **OFFLINE** | simulovaná data, celé rozhraní k vyzkoušení | nic |
+| **PAPER** | reálná data z burzy, obchody jen nanečisto | nic (jen internet) |
+| **LIVE** | skutečné peníze, vyžádá si potvrzení | API klíče |
+
+Z Terminálu totéž: `./start-mac.command 1` (offline), `2` (paper), `3` (live).
+
+### Co uvidíš v rozhraní
+
+`http://localhost:8080` — pět záložek, obnovuje se každé 3 sekundy:
+
+* **Živý přehled** — karta pro každý sledovaný trh: cena, režim, ATR/ADX/RSI,
+  graf, a **skóre pro long i short vedle sebe** včetně navrženého SL a všech TP.
+  Zeleně orámovaný směr = robot by právě teď vstoupil. Pod tím vstupní spouštěče
+  (pullback / mean-reversion / průraz) s vysvětlením, co se na trhu stalo.
+* **Pozice** — otevřené obchody, průběžný PnL, tlačítko na okamžité zavření.
+* **Rozhodnutí** — *proč* vstoupil nebo nevstoupil. Každý signál, skóre a důvod
+  zamítnutí („protitrendový vstup v silném trendu", „spread příliš široký").
+* **Historie** — uzavřené obchody s PnL a výsledkem v R.
+* **Nastavení** — viz níže.
+
+### Co si můžeš nastavit přímo v rozhraní
+
+Změny platí okamžitě, bez restartu, a uloží se do `config/config.yaml`:
+
+| Skupina | Volby |
+|---|---|
+| **Investice a riziko** | % účtu na obchod (výchozí 2 %), tvrdý strop, riziko portfolia, denní stop, max. páka, max. pozic, max. obchodů za den |
+| **Kdy vstoupit** | minimální skóre, zákaz protitrendu, učení z historie, ADX prahy pro trend/range, hranice volatility, násobek vyššího TF |
+| **SL / TP pro každý režim** | SL jako násobek ATR, trailing jako násobek ATR, a **libovolný počet TP** — každý s vlastním násobkem R a podílem pozice; tlačítkem přidáš nebo ubereš stupeň |
+| **Sledované trhy** | seznam symbolů, timeframe, interval skenu, **autopilot**, minimální síla spouštěče |
+| **Ochrany** | pauza po ztrátě, pauza po sérii ztrát, max. spread, časový stop, kill switch |
+
+Citlivá pole (režim, burza, API klíče) rozhraní změnit **nemůže** — mění se
+jen v souboru, aby je nešlo přepnout omylem nebo přes prohlížeč.
+
+### Autopilot vs. TradingView
+
+Bot umí pracovat dvěma způsoby a můžeš je i kombinovat:
+
+* **Autopilot (zapneš v Nastavení)** — skener sám hledá vstupy stejnou logikou,
+  jakou má Pine skript. **Nepotřebuje TradingView ani veřejnou adresu**, takže
+  na MacBooku funguje rovnou. Doporučená volba.
+* **TradingView webhook** — signály chodí z tvých alertů. Vyžaduje placený plán
+  TradingView a veřejnou HTTPS adresu; z domácího Macu potřebuješ tunel
+  (`cloudflared tunnel --url http://localhost:8080`) a jeho URL vložit do alertu.
 
 ---
 
@@ -42,7 +105,7 @@ python -m atb venues                          # přehled burz a jejich páky
 python -m atb analyze BTC/USDT:USDT            # rozbor trhu: režim, skóre, návrh SL/TP
 python -m atb backtest BTC/USDT:USDT --limit 1500
 python -m atb run                              # webhook server v paper režimu
-pytest                                         # 131 testů
+pytest                                         # 156 testů
 ```
 
 Server pak poslouchá na `http://localhost:8080/webhook/tradingview`.
@@ -227,6 +290,10 @@ docker compose -f docker/docker-compose.yml logs -f
 
 | Endpoint | Význam |
 |---|---|
+| `GET /` | Webové rozhraní |
+| `GET /api/state` | Vše pro rozhraní v jednom dotazu |
+| `PUT /api/settings` | Změna nastavení za běhu |
+| `POST /api/scan` | Vynutí okamžitý sken trhů |
 | `GET /health` | Kontrola, že bot žije |
 | `GET /status` | Equity, otevřené pozice, statistika |
 | `GET /trades?limit=20` | Otevřené a uzavřené obchody |
@@ -263,6 +330,8 @@ jsou v `.gitignore`. V živém režimu je webhook secret povinný a `/docs` se v
 ```
 src/atb/
 ├── main.py               CLI (demo, run, analyze, backtest, venues, status, close-all)
+├── scanner.py            skener na pozadí: živý přehled + autopilot
+├── ui/                   webové rozhraní (HTML/CSS/JS, bez build kroku)
 ├── trader.py             orchestrace: signál → rozhodnutí → exekuce
 ├── config.py             YAML + přepisy z prostředí, validace přes pydantic
 ├── models.py             doménové typy (Signal, TradePlan, Position, …)
@@ -271,13 +340,14 @@ src/atb/
 │   ├── indicators.py     EMA, ATR, ADX, RSI, Bollinger, z-skóre (čisté numpy)
 │   ├── regime.py         klasifikace režimu trhu
 │   ├── scoring.py        confluence skóre a veta
+│   ├── signals.py        vlastní vstupní spouštěče (Python protějšek Pine)
 │   ├── exits.py          SL, TP ladder, trailing, breakeven
 │   └── engine.py         spojení dat, režimu, skóre a plánu
 ├── risk/manager.py       sizing, páka, limity, cooldowny, adaptace
 ├── execution/router.py   odeslání příkazů, umístění SL/TP, úklid po chybě
 ├── monitor/position_manager.py   trailing, breakeven, časový stop, rekonciliace
 ├── exchanges/            base, ccxt_adapter, paper broker, offline demo, katalog burz
-├── webhook/              parsování payloadu, HMAC, FastAPI server
+├── webhook/              parsování payloadu, HMAC, API a FastAPI server
 └── state/store.py        SQLite: obchody, signály, equity, statistiky režimů
 ```
 
@@ -286,7 +356,7 @@ src/atb/
 ## Testy
 
 ```bash
-pytest                      # 131 testů, běží bez sítě proti falešné burze
+pytest                      # 156 testů, běží bez sítě proti falešné burze
 pytest --cov=src/atb        # s pokrytím
 ruff check src tests        # lint
 ```
