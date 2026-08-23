@@ -48,9 +48,9 @@ def main() -> int:
     else:
         print("Upozornění: WEBHOOK_SECRET není nastaven, request nebude podepsaný.")
 
-    request = urllib.request.Request(args.url, data=body, headers=headers)  # noqa: S310
+    request = urllib.request.Request(args.url, data=body, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
+        with urllib.request.urlopen(request, timeout=30) as response:
             print(response.status, response.read().decode())
     except urllib.error.HTTPError as exc:
         print(f"HTTP {exc.code}: {exc.read().decode()}")

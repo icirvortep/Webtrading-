@@ -27,18 +27,36 @@ podle aktuálního režimu trhu a odešle příkazy na burzu s pákovým obchodo
 | **Živé rozhraní** | Webový dashboard: co robot vidí, proč vstoupil, pozice, historie — a nastavení všeho za běhu |
 | **Autopilot** | Vlastní generátor signálů — funguje bez TradingView i bez veřejné adresy |
 | **Výběr trhů** | Robot si vybírá ze **všech perpetual kontraktů na burze**, ne z pevného seznamu |
-| **Provoz** | Spouštěč pro macOS, offline režim, paper broker, backtest, Telegram notifikace, Docker, 173 testů |
+| **Provoz** | Aplikace pro macOS s ikonou, offline režim, paper broker, backtest, Telegram notifikace, Docker, 183 testů |
 
 ---
 
-## Spuštění na MacBooku
+## Instalace na MacBook
 
-**Dvojklik na `start-mac.command`** ve Finderu. Poprvé si sám vytvoří prostředí,
-nainstaluje závislosti a zeptá se na režim; pak otevře rozhraní v prohlížeči.
+Otevři **Terminál** (Cmd+mezerník → napiš „Terminál“) a vlož tyhle dva řádky:
 
-> Při prvním spuštění může macOS hlásit „nelze otevřít, protože pochází od
-> neověřeného vývojáře". Klikni pravým → *Otevřít* → *Otevřít*, nebo v Terminálu
-> spusť `./start-mac.command`.
+```bash
+git clone -b claude/tradingview-auto-trading-bot-iqmukq https://github.com/icirvortep/Webtrading-.git ~/AdaptiveTradingBot
+~/AdaptiveTradingBot/scripts/install-mac.sh
+```
+
+Na ploše se objeví aplikace **Adaptive Trading Bot** s ikonou. Od té chvíle už
+Terminál nepotřebuješ — stačí dvojklik.
+
+> Kdyby macOS při prvním spuštění hlásil „od neověřeného vývojáře": klikni na
+> ikonu pravým tlačítkem → *Otevřít* → *Otevřít*. Stačí jednou.
+
+Aktualizace na novou verzi: `cd ~/AdaptiveTradingBot && git pull`.
+Ikonu na ploše měnit nemusíš, ukazuje na tutéž složku.
+
+Aplikace jde spustit i bez instalace — dvojklikem na `start-mac.command`
+přímo ve složce, nebo z Terminálu `./start-mac.command`.
+
+### Co dvojklik udělá
+
+Otevře Terminál (aby bylo vidět, co se děje, a šlo to ukončit přes Ctrl+C),
+poprvé si sám vytvoří prostředí a doinstaluje závislosti, zeptá se na režim
+a otevře rozhraní v prohlížeči.
 
 Na výběr jsou tři režimy:
 
@@ -49,6 +67,16 @@ Na výběr jsou tři režimy:
 | **LIVE** | skutečné peníze, vyžádá si potvrzení | API klíče |
 
 Z Terminálu totéž: `./start-mac.command 1` (offline), `2` (paper), `3` (live).
+
+### Kdyby něco nešlo
+
+| Problém | Řešení |
+|---|---|
+| „od neověřeného vývojáře" | pravým tlačítkem na ikonu → *Otevřít* → *Otevřít* |
+| Aplikace nic neudělá | v Terminálu: `~/AdaptiveTradingBot/start-mac.command` — uvidíš chybu |
+| „Nenašel jsem složku s botem" | složka se přesunula; spusť znovu `scripts/install-mac.sh` |
+| Chybí Python | `brew install python@3.12` (Homebrew z https://brew.sh) |
+| Port 8080 je obsazený | `./start-mac.command` a pak v `config/config.yaml` změň `webhook.port` |
 
 ### Co uvidíš v rozhraní
 
@@ -129,7 +157,7 @@ python -m atb venues                          # přehled burz a jejich páky
 python -m atb analyze BTC/USDT:USDT            # rozbor trhu: režim, skóre, návrh SL/TP
 python -m atb backtest BTC/USDT:USDT --limit 1500
 python -m atb run                              # webhook server v paper režimu
-pytest                                         # 173 testů
+pytest                                         # 183 testů
 ```
 
 Server pak poslouchá na `http://localhost:8080/webhook/tradingview`.
@@ -374,6 +402,11 @@ src/atb/
 ├── exchanges/            base, ccxt_adapter, paper broker, offline demo, katalog burz
 ├── webhook/              parsování payloadu, HMAC, API a FastAPI server
 └── state/store.py        SQLite: obchody, signály, equity, statistiky režimů
+
+macos/AdaptiveTradingBot.app   balíček aplikace pro macOS (ikona + spouštěč)
+scripts/install-mac.sh         položí aplikaci na plochu
+scripts/make_icon.py           vygeneruje ikonu (.icns) bez externích nástrojů
+start-mac.command              spuštění bez instalace
 ```
 
 ---
@@ -381,9 +414,9 @@ src/atb/
 ## Testy
 
 ```bash
-pytest                      # 173 testů, běží bez sítě proti falešné burze
+pytest                      # 183 testů, běží bez sítě proti falešné burze
 pytest --cov=src/atb        # s pokrytím
-ruff check src tests        # lint
+ruff check src tests scripts   # lint
 ```
 
 Testy pokrývají mimo jiné: přesnost sizingu na 2 %, stropy páky, denní

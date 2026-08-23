@@ -1,0 +1,47 @@
+#!/bin/bash
+# Spouštěč aplikace. Najde složku s botem a otevře ji v Terminálu,
+# aby bylo vidět, co se děje, a šlo to ukončit přes Ctrl+C.
+set -uo pipefail
+
+BUNDLE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+dialog() {
+  # Do konzole i do okna — když někdo spustí binárku z Terminálu kvůli
+  # diagnostice, musí zprávu vidět, ne jen tiché ukončení.
+  printf '%s\n' "$1" >&2
+  /usr/bin/osascript -e "display dialog \"$1\" buttons {\"OK\"} default button 1 with title \"Adaptive Trading Bot\" with icon caution" >/dev/null 2>&1 || true
+}
+
+# Kde bot bydlí. Pořadí: zapsaná cesta → vedle aplikace → obvyklá místa.
+BOT_HOME=""
+HOME_FILE="$BUNDLE/Contents/Resources/bot-home.txt"
+if [ -f "$HOME_FILE" ]; then
+  candidate="$(tr -d '\n' < "$HOME_FILE")"
+  [ -f "$candidate/start-mac.command" ] && BOT_HOME="$candidate"
+fi
+if [ -z "$BOT_HOME" ]; then
+  for candidate in \
+      "$(cd "$BUNDLE/../.." 2>/dev/null && pwd)" \
+      "$HOME/AdaptiveTradingBot" \
+      "$HOME/Webtrading-" \
+      "$HOME/Documents/AdaptiveTradingBot" \
+      "$HOME/Desktop/AdaptiveTradingBot"; do
+    if [ -n "$candidate" ] && [ -f "$candidate/start-mac.command" ]; then
+      BOT_HOME="$candidate"; break
+    fi
+  done
+fi
+
+if [ -z "$BOT_HOME" ]; then
+  dialog "Nenašel jsem složku s botem.\n\nSpusť v Terminálu:\n\ngit clone -b claude/tradingview-auto-trading-bot-iqmukq https://github.com/icirvortep/Webtrading-.git ~/AdaptiveTradingBot\n~/AdaptiveTradingBot/scripts/install-mac.sh\n\nTím se aplikace vytvoří znovu i s cestou."
+  exit 1
+fi
+
+# Terminál potřebuje cestu bezpečně uvozenou pro AppleScript i pro shell.
+ESCAPED="${BOT_HOME//\\/\\\\}"; ESCAPED="${ESCAPED//\"/\\\"}"
+/usr/bin/osascript <<APPLESCRIPT
+tell application "Terminal"
+    activate
+    do script "clear; cd \"$ESCAPED\" && ./start-mac.command"
+end tell
+APPLESCRIPT

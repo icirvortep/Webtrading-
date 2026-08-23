@@ -15,5 +15,5 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements-dev.txt
-      - run: ruff check src tests
+      - run: ruff check src tests scripts
       - run: pytest --cov=src/atb --cov-report=term-missing
