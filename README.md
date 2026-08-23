@@ -24,7 +24,7 @@ podle aktuálního režimu trhu a odešle příkazy na burzu s pákovým obchodo
 | **Páka** | Dopočítaná z potřeby marže, omezená konfigurací, burzou i odstupem likvidace od SL |
 | **Exekuce** | CCXT (10+ burz), SL/TP přímo na burze, automatické uzavření pozice, pokud SL nelze umístit |
 | **Učení** | Riziko se posouvá podle historické expektance v daném režimu (SQLite historie) |
-| **Provoz** | Paper broker, backtest, REST status endpointy, Telegram notifikace, Docker, 120 testů |
+| **Provoz** | Offline demo, paper broker, backtest, REST status endpointy, Telegram notifikace, Docker, 131 testů |
 
 ---
 
@@ -37,15 +37,44 @@ pip install -r requirements-dev.txt
 cp .env.example .env            # klíče můžeš zatím nechat prázdné
 
 export PYTHONPATH=src
+python -m atb demo                            # ← START ZDE: celý bot naživo, bez klíčů a bez internetu
 python -m atb venues                          # přehled burz a jejich páky
 python -m atb analyze BTC/USDT:USDT            # rozbor trhu: režim, skóre, návrh SL/TP
 python -m atb backtest BTC/USDT:USDT --limit 1500
 python -m atb run                              # webhook server v paper režimu
-pytest                                         # 120 testů
+pytest                                         # 131 testů
 ```
 
 Server pak poslouchá na `http://localhost:8080/webhook/tradingview`.
 Stav účtu a pozic: `curl localhost:8080/status`.
+
+### `python -m atb demo` — co uvidíš
+
+Projde celý řetězec na vygenerovaných datech, takže si chování ověříš dřív,
+než se bot vůbec připojí k burze:
+
+```
+[1/5] Účet: 10000.00 USDT, riziko na obchod 2.0 %
+[2/5] Rozbor trhu BTC/USDT:USDT 15m
+      cena 77309.72 | režim range | ATR 0.70 % | ADX 22.7 | RSI 63.1 | HTF +0
+[3/5] Přichází signál z TradingView: LONG BTC/USDT:USDT
+      → PŘIJAT (skóre 0.701)
+[4/5] Plán obchodu
+      vstup      77309.72
+      stop loss  75392.18  (2.48 % od vstupu)
+      TP1        78843.74  (0.8R, 60 % pozice)
+      TP2        80186.02  (1.5R, 40 % pozice)
+      množství   0.081605  (notional 6308.85 USDT)
+      páka       1x
+      riziko     156.48 USDT = 1.56 % účtu  ← zásah SL stojí přesně tolik
+      kontrola   1917.53 × 0.081605 = 156.48 USDT
+[5/5] Řízení pozice v čase
+      cena +1.2R → SL posunut na 77363.84 (breakeven)
+      cena   +8R → SL posunut na 89889.65 (trailing)
+```
+
+Výstup je deterministický — stejný běh dá stejná čísla. Zkus i
+`--side short`, ať vidíš, jak vypadá zamítnutý signál.
 
 ---
 
@@ -233,7 +262,7 @@ jsou v `.gitignore`. V živém režimu je webhook secret povinný a `/docs` se v
 
 ```
 src/atb/
-├── main.py               CLI (run, analyze, backtest, venues, status, close-all)
+├── main.py               CLI (demo, run, analyze, backtest, venues, status, close-all)
 ├── trader.py             orchestrace: signál → rozhodnutí → exekuce
 ├── config.py             YAML + přepisy z prostředí, validace přes pydantic
 ├── models.py             doménové typy (Signal, TradePlan, Position, …)
@@ -247,7 +276,7 @@ src/atb/
 ├── risk/manager.py       sizing, páka, limity, cooldowny, adaptace
 ├── execution/router.py   odeslání příkazů, umístění SL/TP, úklid po chybě
 ├── monitor/position_manager.py   trailing, breakeven, časový stop, rekonciliace
-├── exchanges/            base, ccxt_adapter, paper broker, katalog burz
+├── exchanges/            base, ccxt_adapter, paper broker, offline demo, katalog burz
 ├── webhook/              parsování payloadu, HMAC, FastAPI server
 └── state/store.py        SQLite: obchody, signály, equity, statistiky režimů
 ```
@@ -257,7 +286,7 @@ src/atb/
 ## Testy
 
 ```bash
-pytest                      # 120 testů, běží bez sítě proti falešné burze
+pytest                      # 131 testů, běží bez sítě proti falešné burze
 pytest --cov=src/atb        # s pokrytím
 ruff check src tests        # lint
 ```

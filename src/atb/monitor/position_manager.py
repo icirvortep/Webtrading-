@@ -89,13 +89,16 @@ class PositionManager:
             return
 
         entry = float(trade["entry"])
-        stop = float(trade["stop_loss"] or plan.get("stop_loss") or 0.0)
-        r = abs(entry - stop) if stop else 0.0
-        if r <= 0:
+        current_stop = float(trade["stop_loss"] or plan.get("stop_loss") or 0.0)
+        # R se vždy měří k PŮVODNÍMU stopu z plánu — jinak by posun na
+        # breakeven zmenšil R k nule a trailing by se spustil předčasně.
+        original_stop = float(plan.get("stop_loss") or current_stop)
+        r = abs(entry - original_stop)
+        if r <= 0 or current_stop <= 0:
             return
         progress_r = (price - entry) * side.sign / r
 
-        new_stop = stop
+        new_stop = current_stop
         reason = ""
 
         # 1) breakeven po dosažení úrovně prvního TP
@@ -125,7 +128,7 @@ class PositionManager:
                 ):
                     new_stop, reason = trailed, "trailing"
 
-        if reason and abs(new_stop - stop) > entry * 1e-6:
+        if reason and abs(new_stop - current_stop) > entry * 1e-6:
             self._move_stop(trade, position, side, new_stop, reason, progress_r)
 
         # 3) časový stop

@@ -52,6 +52,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--port", type=int, default=None)
     run.add_argument("--live", action="store_true", help="přepne do živého režimu (vyžaduje potvrzení)")
 
+    demo = sub.add_parser("demo", help="ukázka celého toku offline — bez klíčů a bez internetu")
+    demo.add_argument("--symbol", default="BTC/USDT:USDT")
+    demo.add_argument("--side", choices=["long", "short"], default="long")
+    demo.add_argument("--equity", type=float, default=10_000.0)
+    demo.add_argument("--timeframe", default="15m")
+
     sub.add_parser("venues", help="přehled podporovaných burz a jejich páky")
     sub.add_parser("status", help="equity, otevřené pozice a statistika")
     sub.add_parser("close-all", help="uzavře všechny otevřené pozice")
@@ -81,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging(args.log_level or cfg.log_level, cfg.log_json, log_file="data/atb.log")
 
     handlers = {
+        "demo": cmd_demo,
         "venues": cmd_venues,
         "run": cmd_run,
         "status": cmd_status,
@@ -219,6 +226,97 @@ def cmd_test_signal(cfg: AppConfig, args: argparse.Namespace) -> int:
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
     trader.shutdown()
     return 0
+
+
+def cmd_demo(cfg: AppConfig, args: argparse.Namespace) -> int:
+    """Projde celý řetězec na vygenerovaných datech — nic se nikam neodesílá."""
+    from .exchanges.offline import OfflineExchange
+    from .models import Action, Signal
+    from .state.store import Store
+
+    cfg.mode = "paper"
+    cfg.dry_run = False
+    cfg.monitor.enabled = False
+    exchange = OfflineExchange(cfg.exchange, equity=args.equity)
+    trader = Trader(cfg, exchange=exchange, store=Store(":memory:"))
+
+    print("\n" + "=" * 72)
+    print("  UKÁZKA — simulovaná data, žádné API klíče, žádné reálné objednávky")
+    print("=" * 72)
+
+    balance = exchange.fetch_balance()
+    side = Side(args.side)
+    print(f"\n[1/5] Účet: {balance.equity:.2f} {balance.currency}, "
+          f"riziko na obchod {cfg.risk.risk_per_trade_pct} %")
+
+    snap = trader.engine.analyze(args.symbol, args.timeframe)
+    print(f"\n[2/5] Rozbor trhu {args.symbol} {args.timeframe}")
+    print(f"      cena {snap.price:.2f} | režim {snap.regime.value} "
+          f"| ATR {snap.atr_pct:.2f} % | ADX {snap.adx:.1f} "
+          f"| RSI {snap.rsi:.1f} | HTF {snap.htf_trend:+d}")
+
+    print(f"\n[3/5] Přichází signál z TradingView: {side.value.upper()} {args.symbol}")
+    result = trader.handle_signal(Signal(
+        symbol=args.symbol, action=Action.ENTRY, side=side,
+        timeframe=args.timeframe, strategy="demo", confidence=0.8,
+    ))
+
+    if result["status"] != "executed":
+        print(f"      → Signál ZAMÍTNUT ({result.get('reason')}): {result.get('detail')}")
+        print("\n      Právě tohle je hlavní práce bota — většinu signálů odfiltruje.")
+        print("      Zkus druhý směr: python -m atb demo --side "
+              f"{'short' if side is Side.LONG else 'long'}")
+        trader.shutdown()
+        return 0
+
+    plan = result["plan"]
+    r = abs(plan["entry"] - plan["stop_loss"])
+    print(f"      → PŘIJAT (skóre {plan['score']:.3f})")
+    print("\n[4/5] Plán obchodu")
+    print(f"      vstup      {plan['entry']:.2f}")
+    print(f"      stop loss  {plan['stop_loss']:.2f}  ({r / plan['entry'] * 100:.2f} % od vstupu)")
+    for index, tp in enumerate(plan["take_profits"], start=1):
+        print(f"      TP{index}        {tp['price']:.2f}  ({tp['r']:.1f}R, "
+              f"{tp['fraction'] * 100:.0f} % pozice)")
+    print(f"      množství   {plan['quantity']:.6f}  (notional {plan['notional']:.2f} USDT)")
+    print(f"      páka       {plan['leverage']}x")
+    print(f"      riziko     {plan['risk_amount']:.2f} USDT = "
+          f"{plan['risk_pct']:.2f} % účtu  ← zásah SL stojí přesně tolik")
+    print(f"      kontrola   {r:.2f} × {plan['quantity']:.6f} = "
+          f"{r * plan['quantity']:.2f} USDT")
+
+    print("\n      Důvody rozhodnutí:")
+    for reason in plan["reasons"]:
+        print(f"        · {reason}")
+
+    print("\n[5/5] Řízení pozice v čase (cena roste o 1.2R a pak o 8R)")
+    trade = trader.store.open_trades()[0]
+    entry, stop = trade["entry"], trade["stop_loss"]
+    for label, multiple in (("+1.2R", 1.2), ("+8R", 8.0)):
+        _shift_offline_price(exchange, args.symbol, entry + (entry - stop) * multiple * side.sign)
+        trader.positions.tick()
+        current = trader.store.open_trades()[0]["stop_loss"]
+        moved = "breakeven" if abs(current - entry) < entry * 0.002 else "trailing"
+        print(f"      cena {label:>5} → SL posunut na {current:.2f} ({moved})")
+
+    print("\n" + "=" * 72)
+    print("  Takhle to poběží i naostro — jen s reálnými daty a klíči.")
+    print("  Další krok:  python -m atb run     (webhook server, paper režim)")
+    print("=" * 72 + "\n")
+    trader.shutdown()
+    return 0
+
+
+def _shift_offline_price(exchange, symbol: str, price: float) -> None:
+    """Posune poslední svíčku offline burzy na zadanou cenu."""
+    for key, series in exchange._series.items():
+        if not key.startswith(symbol):
+            continue
+        last = list(series[-1])
+        last[4] = price
+        last[2] = max(last[2], price)
+        last[3] = min(last[3], price)
+        series[-1] = last
 
 
 def _confirm_live(cfg: AppConfig) -> bool:

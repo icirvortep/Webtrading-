@@ -121,3 +121,19 @@ def test_orphan_position_is_reported_not_touched(config, exchange, caplog):
     assert "Neevidovaná pozice" in caplog.text
     assert "ETH/USDT:USDT" in exchange.positions
     store.close()
+
+
+def test_breakeven_does_not_trigger_trailing_prematurely(trader, exchange):
+    """Po posunu na breakeven se R musí dál měřit k původnímu stopu."""
+    trade = open_trade(trader)
+    entry, stop = trade["entry"], trade["stop_loss"]
+    r = entry - stop
+
+    set_price(exchange, entry + r * 1.2)                # breakeven se aktivuje
+    trader.positions.tick()
+    after_breakeven = trader.store.open_trades()[0]["stop_loss"]
+    assert after_breakeven == pytest.approx(entry, rel=0.002)
+
+    set_price(exchange, entry + r * 1.4)                # pořád pod prahem TP2 (2R)
+    trader.positions.tick()
+    assert trader.store.open_trades()[0]["stop_loss"] == after_breakeven
