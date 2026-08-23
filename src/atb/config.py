@@ -138,6 +138,10 @@ class UniverseConfig(BaseModel):
     refresh_minutes: float = 15.0
     #: symboly, které nikdy nechceme (např. pákové tokeny)
     exclude_patterns: list[str] = Field(default_factory=lambda: ["1000000", "USDC/"])
+    #: Když absolutní práh objemu vyřadí skoro všechno (typicky na menší
+    #: burze), vezme se místo něj prostě nejlikvidnější špička. Bez toho by
+    #: uživatel musel hádat správné číslo pro každou burzu zvlášť.
+    adaptive_filters: bool = True
     #: váhy pro pořadí kandidátů, součet nemusí být 1
     weight_liquidity: float = 0.4
     weight_volatility: float = 0.35
@@ -319,6 +323,7 @@ EDITABLE_PATHS: tuple[tuple[str, ...], ...] = (
     ("scanner", "auto_universe"),
     ("universe", "enabled"),
     ("universe", "min_volume_24h"),
+    ("universe", "adaptive_filters"),
     ("universe", "max_spread_bps"),
     ("universe", "deep_scan_count"),
     ("universe", "batch_size"),

@@ -29,7 +29,9 @@ def exchange_with_universe() -> FakeExchange:
 
 
 def test_illiquid_markets_are_filtered_out(exchange_with_universe):
-    selector = build(exchange_with_universe, min_volume_24h=50_000_000.0)
+    # ústup při malé nabídce se testuje zvlášť níž — tady chceme přísný filtr
+    selector = build(exchange_with_universe, min_volume_24h=50_000_000.0,
+                     deep_scan_count=1, adaptive_filters=False)
     symbols = [c.symbol for c in selector.refresh()]
     assert "DEAD/USDT:USDT" not in symbols
     assert "BTC/USDT:USDT" in symbols
@@ -62,7 +64,7 @@ def test_wide_spread_disqualifies_market(exchange_with_universe, monkeypatch):
         return {"BTC/USDT:USDT": {"last": 100.0, "bid": 99.0, "ask": 101.0,
                                   "quoteVolume": 999_000_000.0, "high": 105, "low": 95}}
     monkeypatch.setattr(exchange_with_universe, "fetch_tickers", wide)
-    selector = build(exchange_with_universe, max_spread_bps=5.0)
+    selector = build(exchange_with_universe, max_spread_bps=5.0, adaptive_filters=False)
     assert selector.refresh() == []
 
 
@@ -151,3 +153,44 @@ def test_dropped_symbols_disappear_from_view(trader, monkeypatch):
     monkeypatch.setattr(trader.scanner, "watchlist", lambda: ["ETH/USDT:USDT"])
     trader.scanner.scan_once()
     assert set(trader.scanner.snapshot()) == {"ETH/USDT:USDT"}
+
+
+# ---------- ústup filtrů na menších burzách ----------
+
+def test_volume_floor_gives_way_when_it_would_empty_the_universe(exchange_with_universe, caplog):
+    """Na Bybit EU vyřadí práh z globální burzy úplně všechno.
+
+    Správná odpověď není „neobchoduj nic", ale „vezmi to nejlikvidnější,
+    co tahle burza má".
+    """
+    selector = build(exchange_with_universe, min_volume_24h=10_000_000_000.0,
+                     deep_scan_count=3, adaptive_filters=True)
+    with caplog.at_level("WARNING"):
+        candidates = selector.refresh()
+    assert len(candidates) >= 3
+    # pořadí určuje složené skóre, ne samotný objem — proto jen kontrola,
+    # že se nejlikvidnější trh do výběru dostal (řazení řeší test níž)
+    assert "BTC/USDT:USDT" in [c.symbol for c in candidates]
+    assert "min_volume_24h" in caplog.text
+
+
+def test_relaxed_selection_still_prefers_liquidity(exchange_with_universe):
+    selector = build(exchange_with_universe, min_volume_24h=10_000_000_000.0,
+                     deep_scan_count=3, weight_liquidity=1.0,
+                     weight_volatility=0.0, weight_momentum=0.0)
+    volumes = [c.volume_24h for c in selector.refresh()]
+    assert volumes == sorted(volumes, reverse=True)
+
+
+def test_strict_filter_is_kept_when_enough_markets_pass(exchange_with_universe):
+    """Když filtr propustí dost trhů, k ústupu vůbec nedojde."""
+    selector = build(exchange_with_universe, min_volume_24h=50_000_000.0,
+                     deep_scan_count=2, adaptive_filters=True)
+    symbols = [c.symbol for c in selector.refresh()]
+    assert "DEAD/USDT:USDT" not in symbols
+
+
+def test_adaptive_fallback_can_be_switched_off(exchange_with_universe):
+    selector = build(exchange_with_universe, min_volume_24h=10_000_000_000.0,
+                     adaptive_filters=False)
+    assert selector.refresh() == []

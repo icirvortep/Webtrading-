@@ -97,22 +97,17 @@ class UniverseSelector:
         ]
         self.total_markets = len(raw)
 
-        rows = []
+        measured = []
         for symbol, ticker in raw:
             row = self._metrics(symbol, ticker)
             if row is not None:
-                rows.append(row)
-        self.filtered_out = self.total_markets - len(rows)
+                measured.append(row)
 
-        self.candidates = self._rank(rows)
+        eligible = self._apply_filters(measured)
+        self.filtered_out = self.total_markets - len(eligible)
+        self.candidates = self._rank(eligible)
         self.last_refresh = time.time()
         self.last_error = None
-        if self.total_markets and len(self.candidates) < min(3, self.cfg.deep_scan_count):
-            log.warning(
-                "Filtrem prošlo jen %d trhů z %d. Na menších burzách bývá "
-                "universe.min_volume_24h (%.0f) příliš vysoký — sniž ho v Nastavení.",
-                len(self.candidates), self.total_markets, self.cfg.min_volume_24h,
-            )
         log.info(
             "Žebříček trhů: %d z %d prošlo filtrem, top 5: %s",
             len(self.candidates), self.total_markets,
@@ -153,15 +148,11 @@ class UniverseSelector:
             volume = base_volume * price if base_volume and price else None
         if not price or price <= 0 or volume is None:
             return None
-        if volume < self.cfg.min_volume_24h:
-            return None
 
         bid, ask = _num(ticker.get("bid")), _num(ticker.get("ask"))
         spread_bps = 0.0
         if bid and ask and bid > 0:
             spread_bps = (ask - bid) / ((ask + bid) / 2) * 10_000
-            if spread_bps > self.cfg.max_spread_bps:
-                return None
 
         high, low = _num(ticker.get("high")), _num(ticker.get("low"))
         range_pct = ((high - low) / price * 100) if high and low and price else 0.0
@@ -172,6 +163,42 @@ class UniverseSelector:
             range_24h_pct=range_pct, spread_bps=spread_bps,
             liquidity_score=0.0, volatility_score=0.0, momentum_score=0.0, rank_score=0.0,
         )
+
+    def _apply_filters(self, rows: list[Candidate]) -> list[Candidate]:
+        """Filtry na likviditu a spread, s ústupem když by nezbylo nic.
+
+        Absolutní práh objemu je vždycky odhad kalibrovaný na jednu burzu.
+        Když na jiné vyřadí celý trh, není správná odpověď „nic neobchoduj",
+        ale „vezmi to nejlikvidnější, co tahle burza má".
+        """
+        needed = max(self.cfg.deep_scan_count, 1)
+        passed = [
+            row for row in rows
+            if row.volume_24h >= self.cfg.min_volume_24h
+            and row.spread_bps <= self.cfg.max_spread_bps
+        ]
+        if len(passed) >= needed or not self.cfg.adaptive_filters or not rows:
+            return passed
+
+        by_volume = sorted(rows, key=lambda r: r.volume_24h, reverse=True)
+        relaxed = [r for r in by_volume if r.spread_bps <= self.cfg.max_spread_bps]
+        if len(relaxed) >= needed:
+            log.warning(
+                "Práh objemu %.0f propustil jen %d trhů z %d — beru místo něj "
+                "%d nejlikvidnějších (od %.0f výš). Trvalá změna: uprav "
+                "universe.min_volume_24h v Nastavení.",
+                self.cfg.min_volume_24h, len(passed), len(rows), needed,
+                relaxed[needed - 1].volume_24h,
+            )
+            return relaxed[: needed * 2]
+
+        log.warning(
+            "Filtry objemu i spreadu propustily jen %d trhů z %d — beru "
+            "%d nejlikvidnějších bez ohledu na spread. Zkontroluj "
+            "universe.min_volume_24h a universe.max_spread_bps v Nastavení.",
+            len(passed), len(rows), needed,
+        )
+        return by_volume[: needed * 2]
 
     def _rank(self, rows: list[Candidate]) -> list[Candidate]:
         """Složené skóre z likvidity, volatility a síly pohybu (vše 0..1)."""

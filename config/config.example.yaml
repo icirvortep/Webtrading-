@@ -117,6 +117,9 @@ universe:
   enabled: true
   quote: USDT
   min_volume_24h: 50000000.0      # pod tímto 24h objemem je kniha moc mělká
+  adaptive_filters: true          # když práh vyřadí (skoro) všechno — typicky
+                                  # na menší burze — vezme se místo něj prostě
+                                  # nejlikvidnější špička, ať bot neskončí naprázdno
   max_spread_bps: 8.0
   deep_scan_count: 24             # kolik nejlepších trhů projít plnou analýzou
   batch_size: 8                   # kolik z nich stihnout v jednom kole skenu

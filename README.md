@@ -28,7 +28,7 @@ podle aktuálního režimu trhu a odešle příkazy na burzu s pákovým obchodo
 | **Živé rozhraní** | Webový dashboard: co robot vidí, proč vstoupil, pozice, historie — a nastavení všeho za běhu |
 | **Autopilot** | Vlastní generátor signálů — funguje bez TradingView i bez veřejné adresy |
 | **Výběr trhů** | Robot si vybírá ze **všech perpetual kontraktů na burze**, ne z pevného seznamu |
-| **Provoz** | Aplikace pro macOS s ikonou, offline režim, paper broker, backtest, Telegram notifikace, Docker, 201 testů |
+| **Provoz** | Aplikace pro macOS s ikonou, offline režim, paper broker, backtest, Telegram notifikace, Docker, 208 testů |
 
 ---
 
@@ -158,7 +158,7 @@ python -m atb venues                          # přehled burz a jejich páky
 python -m atb analyze BTC/USDT:USDT            # rozbor trhu: režim, skóre, návrh SL/TP
 python -m atb backtest BTC/USDT:USDT --limit 1500
 python -m atb run                              # webhook server v paper režimu
-pytest                                         # 201 testů
+pytest                                         # 208 testů
 ```
 
 Server pak poslouchá na `http://localhost:8080/webhook/tradingview`.
@@ -381,9 +381,10 @@ universe:
   deep_scan_count: 24          # kolik nejlepších analyzovat do hloubky
 ```
 
-> **Bybit EU má výrazně nižší objemy než globální burza.** Když v logu uvidíš
-> „Filtrem prošlo jen N trhů", sniž `min_volume_24h` — třeba na `1000000`.
-> Měnit to jde přímo v Nastavení v rozhraní, bez restartu.
+> **Práh objemu se přizpůsobí sám.** Je kalibrovaný na objemy globální burzy;
+> na menší (třeba Bybit EU) by vyřadil úplně všechno. Když k tomu dojde, bot
+> místo něj vezme nejlikvidnější špičku a napíše do logu, co udělal —
+> neskončí naprázdno. Vypnout to jde přes `universe.adaptive_filters: false`.
 
 ### 4. Postup zapnutí
 
@@ -498,7 +499,7 @@ start-mac.command              spuštění bez instalace
 ## Testy
 
 ```bash
-pytest                      # 201 testů, běží bez sítě proti falešné burze
+pytest                      # 208 testů, běží bez sítě proti falešné burze
 pytest --cov=src/atb        # s pokrytím
 ruff check src tests scripts   # lint
 ```
