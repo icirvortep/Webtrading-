@@ -136,7 +136,9 @@ def create_app(cfg: AppConfig, trader: Trader, config_path: str | None = None) -
 
         try:
             signal = payload_mod.parse(
-                body, shared_secret=secret, require_secret_in_body=not use_hmac and bool(secret)
+                body, shared_secret=secret,
+                require_secret_in_body=not use_hmac and bool(secret),
+                market_type=cfg.exchange.account_type,
             )
         except payload_mod.PayloadError as exc:
             log.warning("Neplatný payload z %s: %s", client_ip, exc)

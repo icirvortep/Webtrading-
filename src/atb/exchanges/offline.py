@@ -69,6 +69,7 @@ class OfflineExchange(Exchange):
         self.orders: list[dict[str, Any]] = []
         self._series: dict[str, list[list[float]]] = {}
         self._params = {"drift": drift, "volatility": volatility, "seed": seed}
+        self.can_short = cfg.can_short
 
     def _ohlcv_for(self, symbol: str, timeframe: str) -> list[list[float]]:
         key = f"{symbol}|{timeframe}"
@@ -106,6 +107,8 @@ class OfflineExchange(Exchange):
     ]
 
     def list_symbols(self, quote: str = "USDT") -> list[str]:
+        if self.cfg.is_spot:
+            return [f"{base}/{quote}" for base in self.SIMULATED_UNIVERSE]
         return [f"{base}/{quote}:{quote}" for base in self.SIMULATED_UNIVERSE]
 
     def fetch_tickers(self, symbols: list[str] | None = None) -> dict[str, Any]:

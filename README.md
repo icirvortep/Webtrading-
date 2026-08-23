@@ -19,6 +19,7 @@ podle aktuálního režimu trhu a odešle příkazy na burzu s pákovým obchodo
 | **Vstup signálů** | TradingView webhook (JSON i prostý text), HMAC-SHA256 podpis, IP allowlist, deduplikace |
 | **Adaptace na trh** | Detekce režimu (trend / range / volatilní / klidný) z ADX, ATR, EMA, RSI, objemu a vyššího timeframu |
 | **Filtr kvality** | Confluence skóre 0–1 ze 6 faktorů; slabé signály se nezobchodují, silné dostanou větší size |
+| **Trhy** | Perpetual kontrakty i spot — včetně Bybit EU, kde deriváty nejsou |
 | **Řízení rizika** | Fixní % equity na obchod, portfoliový strop, denní stop-loss, cooldowny, kill switch |
 | **SL / TP** | SL z násobku ATR podle režimu, TP jako ladder v násobcích R, breakeven po TP1, ATR trailing po TP2 |
 | **Páka** | Dopočítaná z potřeby marže, omezená konfigurací, burzou i odstupem likvidace od SL |
@@ -27,7 +28,7 @@ podle aktuálního režimu trhu a odešle příkazy na burzu s pákovým obchodo
 | **Živé rozhraní** | Webový dashboard: co robot vidí, proč vstoupil, pozice, historie — a nastavení všeho za běhu |
 | **Autopilot** | Vlastní generátor signálů — funguje bez TradingView i bez veřejné adresy |
 | **Výběr trhů** | Robot si vybírá ze **všech perpetual kontraktů na burze**, ne z pevného seznamu |
-| **Provoz** | Aplikace pro macOS s ikonou, offline režim, paper broker, backtest, Telegram notifikace, Docker, 183 testů |
+| **Provoz** | Aplikace pro macOS s ikonou, offline režim, paper broker, backtest, Telegram notifikace, Docker, 201 testů |
 
 ---
 
@@ -157,7 +158,7 @@ python -m atb venues                          # přehled burz a jejich páky
 python -m atb analyze BTC/USDT:USDT            # rozbor trhu: režim, skóre, návrh SL/TP
 python -m atb backtest BTC/USDT:USDT --limit 1500
 python -m atb run                              # webhook server v paper režimu
-pytest                                         # 183 testů
+pytest                                         # 201 testů
 ```
 
 Server pak poslouchá na `http://localhost:8080/webhook/tradingview`.
@@ -192,6 +193,31 @@ Výstup je deterministický — stejný běh dá stejná čísla. Zkus i
 `--side short`, ať vidíš, jak vypadá zamítnutý signál.
 
 ---
+
+## Spot vs. perpetual kontrakty
+
+Bot umí obě varianty; volí se přes `exchange.account_type`.
+
+| | `swap` (perpetual) | `spot` |
+|---|---|---|
+| Kde | Bybit globální, Binance, Bitget… | **Bybit EU**, každý spotový účet |
+| Páka | až 100× | **žádná** (1×) |
+| Shorty | ano | **ne** — prodat jde jen to, co vlastníš |
+| SL/TP | leží na burze, chrání i při vypnutém botu | **hlídá bot lokálně** |
+| Symboly | `BTC/USDT:USDT` | `BTC/USDT` |
+
+Při `account_type: spot` si bot sám srovná konfiguraci: sníží páku na 1×,
+vypne burzovní stopy, odmítne short signály a v přehledu trhů přestane
+nabízet směr, který stejně nejde zobchodovat.
+
+> **Důležité u spotu:** stop loss neleží na burze, takže **existuje jen dokud
+> bot běží**. Když vypneš Mac nebo aplikaci, pozice zůstane bez ochrany.
+> U perpetuálů to neplatí — tam SL drží burza.
+
+**Bybit EU** (`bybiteu`) má MiCA licenci pro spot a margin, ale **nenabízí
+perpetual kontrakty** — na ty je potřeba licence MiFID II, kterou zatím nemá.
+Při `account_type: swap` proto bot rovnou při startu odmítne nastartovat
+a vysvětlí proč.
 
 ## Výběr burzy
 
@@ -414,7 +440,7 @@ start-mac.command              spuštění bez instalace
 ## Testy
 
 ```bash
-pytest                      # 183 testů, běží bez sítě proti falešné burze
+pytest                      # 201 testů, běží bez sítě proti falešné burze
 pytest --cov=src/atb        # s pokrytím
 ruff check src tests scripts   # lint
 ```

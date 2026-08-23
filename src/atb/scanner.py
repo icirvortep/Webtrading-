@@ -111,9 +111,9 @@ class MarketScanner:
         for entry in self.snapshot().values():
             if "sides" not in entry:
                 continue
-            long_side, short_side = entry["sides"]["long"], entry["sides"]["short"]
-            best = max(long_side, short_side, key=lambda s: s["score"])
-            direction = "long" if best is long_side else "short"
+            direction, best = max(
+                entry["sides"].items(), key=lambda item: item[1]["score"]
+            )
             rows.append({
                 "symbol": entry["symbol"],
                 "price": entry["market"]["price"],
@@ -137,8 +137,10 @@ class MarketScanner:
         snap = self.trader.engine.analyze(symbol, timeframe)
         ohlcv = self.trader.exchange.fetch_ohlcv(symbol, timeframe, limit=cfg.strategy.ohlcv_limit)
 
+        # Na spotu nemá smysl počítat shorty — prodat jde jen to, co vlastníš.
+        directions = (Side.LONG, Side.SHORT) if self.trader.exchange.can_short else (Side.LONG,)
         sides: dict[str, Any] = {}
-        for side in (Side.LONG, Side.SHORT):
+        for side in directions:
             score = scoring.evaluate(side, snap, cfg.strategy)
             stop = exits.build_stop(side, snap.price, snap, cfg.exits)
             take_profits = exits.build_take_profits(side, snap.price, stop, snap, cfg.exits)
@@ -156,7 +158,10 @@ class MarketScanner:
                 ],
             }
 
-        triggers = signal_mod.detect(ohlcv, snap, cfg.strategy)
+        triggers = [
+            trigger for trigger in signal_mod.detect(ohlcv, snap, cfg.strategy)
+            if trigger.side.value in sides
+        ]
         result = {
             "symbol": symbol,
             "ts": time.time(),

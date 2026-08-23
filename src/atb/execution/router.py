@@ -88,14 +88,20 @@ class ExecutionRouter:
     # ---------- výstup ----------
 
     def close(self, symbol: str, reason: str = "manual") -> OrderResult:
+        trades = self.store.open_trades(symbol)
         positions = [p for p in self.exchange.fetch_positions([symbol]) if p.symbol == symbol]
-        result = self.exchange.close_position(symbol)
+
+        if self.exchange.tracks_positions:
+            result = self.exchange.close_position(symbol)
+        else:
+            # Spot: burza pozice nezná, prodáváme podle vlastní evidence.
+            result = self._close_from_records(symbol, trades)
         if not result.ok:
             self.notifier.send(f"❌ Uzavření {symbol} selhalo: {result.error}", "error")
             return result
 
         exit_price = result.filled_price or (positions[0].entry_price if positions else 0.0)
-        for trade in self.store.open_trades(symbol):
+        for trade in trades:
             pnl = self._realized_pnl(trade, exit_price)
             self.store.close_trade(trade["id"], exit_price, pnl, exit_reason=reason)
             self.notifier.send(
@@ -105,6 +111,50 @@ class ExecutionRouter:
             )
         return result
 
+    def _close_from_records(self, symbol: str, trades: list[dict]) -> OrderResult:
+        """Uzavření podle evidence bota — pro trhy bez pozičního API (spot)."""
+        quantity = sum(float(t["qty_open"] or 0.0) for t in trades)
+        if quantity <= 0:
+            return OrderResult(ok=True, error="žádné evidované množství")
+        side = Side(trades[0]["side"])
+        self.exchange.cancel_all_orders(symbol)
+        return self.exchange.create_market_order(
+            symbol, side.opposite, self.exchange.amount_to_precision(symbol, quantity),
+            reduce_only=self.exchange.tracks_positions,
+        )
+
+    def take_partial_profit(self, trade: dict, fraction: float, reason: str) -> OrderResult:
+        """Odprodá část pozice při zásahu TP a zapíše realizovaný zisk."""
+        symbol = trade["symbol"]
+        side = Side(trade["side"])
+        quantity = self.exchange.amount_to_precision(
+            symbol, float(trade["quantity"]) * fraction
+        )
+        remaining = float(trade["qty_open"] or 0.0)
+        quantity = min(quantity, remaining)
+        if quantity <= 0:
+            return OrderResult(ok=False, error="nulové množství k odprodeji")
+
+        result = self.exchange.create_market_order(
+            symbol, side.opposite, quantity,
+            reduce_only=self.exchange.tracks_positions,
+        )
+        if not result.ok:
+            log.error("Částečný výstup %s selhal: %s", symbol, result.error)
+            return result
+
+        fill = result.filled_price or float(trade["entry"])
+        pnl = (fill - float(trade["entry"])) * quantity * side.sign
+        left = self.store.record_partial_exit(trade["id"], quantity, pnl)
+        self.notifier.send(
+            f"🎯 <b>{symbol}</b> {reason}: odprodáno {fraction * 100:.0f} % @ {fill:.6f}\n"
+            f"Realizováno: <b>{pnl:+.2f} {self.cfg.exchange.quote}</b>, zbývá {left:.8f}",
+            "exit",
+        )
+        if left <= 0:
+            self.store.close_trade(trade["id"], fill, 0.0, exit_reason=reason)
+        return result
+
     def close_all(self, reason: str = "close_all") -> list[OrderResult]:
         results = []
         for pos in self.exchange.fetch_positions():
@@ -112,8 +162,10 @@ class ExecutionRouter:
         return results
 
     def _realized_pnl(self, trade: dict, exit_price: float) -> float:
+        """Zisk poslední nohy — počítá se ze zbývajícího, ne z původního množství."""
         side = Side(trade["side"])
-        return (exit_price - trade["entry"]) * trade["quantity"] * side.sign
+        quantity = float(trade["qty_open"] if trade["qty_open"] is not None else trade["quantity"])
+        return (exit_price - trade["entry"]) * quantity * side.sign
 
     def _notify_entry(self, plan: TradePlan, fill: float, qty: float, trade_id: int) -> None:
         tps = " / ".join(f"{tp.price:.6f} ({tp.fraction * 100:.0f}%)" for tp in plan.take_profits)

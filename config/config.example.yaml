@@ -19,7 +19,10 @@ symbols_blocklist: []
 
 exchange:
   id: bybit                 # `python -m atb venues` vypíše všechny možnosti
-  account_type: swap        # perpetual futures
+  # swap  = perpetual futures (Bybit globální, Binance, Bitget…)
+  # spot  = nákup a prodej aktiva; POVINNÉ pro Bybit EU, který deriváty nemá.
+  #         Na spotu bot automaticky: páka 1x, žádné shorty, SL/TP hlídá sám.
+  account_type: swap
   quote: USDT
   testnet: true             # NEJDŘÍV testnet, teprve pak reálné peníze
   api_key_env: EXCHANGE_API_KEY

@@ -12,6 +12,13 @@ class Exchange(ABC):
 
     id: str = "abstract"
 
+    #: Umí burza vrátit otevřené pozice? Spot je nezná — drží se jen zůstatek
+    #: aktiva, takže pozice si eviduje bot sám v databázi.
+    tracks_positions: bool = True
+
+    #: Jde na tomhle typu účtu prodat něco, co nevlastním?
+    can_short: bool = True
+
     @abstractmethod
     def load_markets(self) -> None: ...
 

@@ -47,6 +47,8 @@ class FakeExchange(Exchange):
         self.fail_stop_loss = False
         self.universe: list[str] = []
         self.volumes: dict[str, float] = {}
+        self.tracks_positions = True
+        self.can_short = True
 
     def load_markets(self) -> None:
         return None
@@ -62,6 +64,8 @@ class FakeExchange(Exchange):
         return Balance(equity=self.equity, free=self.equity, currency="USDT")
 
     def fetch_positions(self, symbols: list[str] | None = None) -> list[Position]:
+        if not self.tracks_positions:
+            return []
         return [p for p in self.positions.values() if not symbols or p.symbol in symbols]
 
     def set_leverage(self, symbol: str, leverage: int) -> None:
@@ -73,7 +77,9 @@ class FakeExchange(Exchange):
     ) -> OrderResult:
         price = float(self.fetch_ticker(symbol)["last"])
         self.orders.append({"type": "market", "symbol": symbol, "side": side, "qty": quantity})
-        if reduce_only:
+        if not self.tracks_positions:
+            pass                       # spot: pozice eviduje bot, ne burza
+        elif reduce_only:
             self.positions.pop(symbol, None)
         else:
             self.positions[symbol] = Position(
@@ -97,6 +103,8 @@ class FakeExchange(Exchange):
         self.orders = [o for o in self.orders if o["symbol"] != symbol]
 
     def close_position(self, symbol: str) -> OrderResult:
+        if not self.tracks_positions:
+            return OrderResult(ok=False, error="spot: uzavírá router podle evidence")
         position = self.positions.get(symbol)
         if not position:
             return OrderResult(ok=True, error="žádná pozice")

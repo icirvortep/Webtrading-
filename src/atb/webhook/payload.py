@@ -39,7 +39,10 @@ def verify_signature(body: bytes, signature: str | None, secret: str) -> bool:
     return hmac.compare_digest(expected, provided)
 
 
-def parse(body: bytes, shared_secret: str = "", require_secret_in_body: bool = False) -> Signal:
+def parse(
+    body: bytes, shared_secret: str = "", require_secret_in_body: bool = False,
+    market_type: str = "swap",
+) -> Signal:
     """Z těla requestu vyrobí normalizovaný Signal."""
     text = body.decode("utf-8", errors="replace").strip()
     if not text:
@@ -57,7 +60,7 @@ def parse(body: bytes, shared_secret: str = "", require_secret_in_body: bool = F
         if not shared_secret or not hmac.compare_digest(provided, shared_secret):
             raise PayloadError("neplatný nebo chybějící secret v těle")
 
-    symbol = _normalize_symbol(str(data.get("symbol") or data.get("ticker") or ""))
+    symbol = _normalize_symbol(str(data.get("symbol") or data.get("ticker") or ""), market_type)
     if not symbol:
         raise PayloadError("chybí symbol")
 
@@ -122,8 +125,8 @@ def _parse_side(data: dict[str, Any], action: Action) -> Side | None:
     raise PayloadError("chybí směr obchodu (buy/sell)")
 
 
-def _normalize_symbol(symbol: str) -> str:
-    """'BTCUSDT' → 'BTC/USDT:USDT' (CCXT formát perpetual kontraktu)."""
+def _normalize_symbol(symbol: str, market_type: str = "swap") -> str:
+    """'BTCUSDT' → 'BTC/USDT:USDT' (perpetual) nebo 'BTC/USDT' (spot)."""
     raw = symbol.strip().upper()
     if not raw:
         return ""
@@ -135,6 +138,8 @@ def _normalize_symbol(symbol: str) -> str:
     for quote in ("USDT", "USDC", "USD", "BUSD"):
         if raw.endswith(quote) and len(raw) > len(quote):
             base = raw[: -len(quote)]
+            if market_type == "spot":
+                return f"{base}/{quote}"
             settle = "USDT" if quote in ("USDT", "BUSD") else quote
             return f"{base}/{quote}:{settle}"
     return raw

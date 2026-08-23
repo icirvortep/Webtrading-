@@ -6,14 +6,14 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 DEFAULT_CONFIG_PATH = Path(os.getenv("ATB_CONFIG", "config/config.yaml"))
 
 
 class ExchangeConfig(BaseModel):
     id: str = "bybit"                      # ccxt id
-    account_type: Literal["swap", "future", "spot"] = "swap"
+    account_type: Literal["swap", "future", "spot", "margin"] = "swap"
     quote: str = "USDT"
     testnet: bool = True
     api_key_env: str = "EXCHANGE_API_KEY"
@@ -22,6 +22,16 @@ class ExchangeConfig(BaseModel):
     hedge_mode: bool = False
     margin_mode: Literal["isolated", "cross"] = "isolated"
     recv_window_ms: int = 10_000
+
+    @property
+    def is_spot(self) -> bool:
+        """Spot: žádné pozice, žádná páka, jen nákup a prodej drženého aktiva."""
+        return self.account_type == "spot"
+
+    @property
+    def can_short(self) -> bool:
+        """Na čistém spotu nejde prodat něco, co nevlastníš."""
+        return self.account_type != "spot"
 
     def credentials(self) -> dict[str, str]:
         creds = {
@@ -202,6 +212,20 @@ class AppConfig(BaseModel):
     webhook: WebhookConfig = Field(default_factory=WebhookConfig)
     monitor: MonitorConfig = Field(default_factory=MonitorConfig)
     notify: NotifyConfig = Field(default_factory=NotifyConfig)
+
+    @model_validator(mode="after")
+    def _align_with_market_type(self) -> AppConfig:
+        """Na spotu nedávají páka ani burzovní SL/TP smysl — srovnáme to tady.
+
+        Bez toho by risk manager počítal páku, kterou burza neumí nastavit,
+        a router by posílal stop příkazy, které spotový účet odmítne.
+        """
+        if self.exchange.is_spot:
+            self.risk.max_leverage = 1
+            self.risk.min_leverage = 1
+            # spotové SL/TP si hlídá bot sám (viz PositionManager)
+            self.exits.use_exchange_stops = False
+        return self
 
     @property
     def live(self) -> bool:

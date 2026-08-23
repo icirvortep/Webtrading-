@@ -54,6 +54,8 @@ class CCXTExchange(Exchange):
                 log.warning("Burza %s testnet oficiálně nepodporuje", cfg.id)
             self.client.set_sandbox_mode(True)
         self._markets: dict[str, Any] = {}
+        self.tracks_positions = not cfg.is_spot
+        self.can_short = cfg.can_short
 
     def _check_market_type_supported(self) -> None:
         """Ověří, že burza vůbec nabízí požadovaný typ trhu.
@@ -95,16 +97,25 @@ class CCXTExchange(Exchange):
         return self.client.fetch_ticker(symbol)
 
     def list_symbols(self, quote: str = "USDT") -> list[str]:
+        """Aktivní trhy odpovídající nastavenému typu účtu."""
         if not self._markets:
             self.load_markets()
+        spot = self.cfg.is_spot
         out = []
         for symbol, market in self._markets.items():
-            if not market.get("active", True) or not market.get("swap"):
+            if not market.get("active", True) or market.get("option"):
                 continue
-            if market.get("quote") != quote or market.get("settle") != quote:
+            if market.get("quote") != quote:
                 continue
-            if market.get("option") or market.get("inverse"):
-                continue
+            if spot:
+                if not market.get("spot"):
+                    continue
+            else:
+                # perpetual kontrakty vypořádané v kotační měně
+                if not market.get("swap") or market.get("inverse"):
+                    continue
+                if market.get("settle") != quote:
+                    continue
             out.append(symbol)
         return out
 
@@ -141,6 +152,9 @@ class CCXTExchange(Exchange):
         return Balance(equity=float(total), free=float(free or total), currency=quote)
 
     def fetch_positions(self, symbols: list[str] | None = None) -> list[Position]:
+        if not self.tracks_positions:
+            # Spot pozice nemá — otevřené obchody si vede bot v databázi.
+            return []
         raw = self.client.fetch_positions(symbols)
         out: list[Position] = []
         for item in raw:
@@ -159,6 +173,8 @@ class CCXTExchange(Exchange):
         return out
 
     def set_leverage(self, symbol: str, leverage: int) -> None:
+        if self.cfg.is_spot:
+            return                      # spotový účet páku nezná
         market = self._market(symbol)
         try:
             if self.client.has.get("setMarginMode"):
@@ -195,6 +211,12 @@ class CCXTExchange(Exchange):
 
     def create_stop_loss(self, symbol: str, side: Side, quantity: float, stop_price: float) -> OrderResult:
         """SL je vždy reduce-only opačným směrem než pozice."""
+        if self.cfg.is_spot:
+            return OrderResult(
+                ok=False,
+                error="spotový účet nepodporuje reduce-only stop příkazy; "
+                      "stopy hlídá bot lokálně (exits.use_exchange_stops=false)",
+            )
         exit_side = "sell" if side is Side.LONG else "buy"
         price = self.price_to_precision(symbol, stop_price)
         params: dict[str, Any] = {
@@ -218,6 +240,8 @@ class CCXTExchange(Exchange):
         return OrderResult(ok=False, error=last)
 
     def create_take_profit(self, symbol: str, side: Side, quantity: float, price: float) -> OrderResult:
+        if self.cfg.is_spot:
+            return OrderResult(ok=False, error="spotový účet: TP hlídá bot lokálně")
         exit_side = "sell" if side is Side.LONG else "buy"
         tp = self.price_to_precision(symbol, price)
         params: dict[str, Any] = {
@@ -246,6 +270,10 @@ class CCXTExchange(Exchange):
             log.warning("cancel_all_orders(%s) selhalo: %s", symbol, exc)
 
     def close_position(self, symbol: str) -> OrderResult:
+        if not self.tracks_positions:
+            return OrderResult(
+                ok=False, error="spot: uzavření řídí router podle evidence obchodů"
+            )
         positions = [p for p in self.fetch_positions([symbol]) if p.symbol == symbol]
         if not positions:
             return OrderResult(ok=True, error="žádná otevřená pozice")

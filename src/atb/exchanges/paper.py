@@ -36,6 +36,7 @@ class PaperExchange(Exchange):
         self.orders: list[dict[str, Any]] = []
         self.trades: list[dict[str, Any]] = []
         self._public = public_client if public_client is not None else _public_ccxt(cfg)
+        self.can_short = cfg.can_short
         self._price_cache: dict[str, tuple[float, float]] = {}
 
     # ---------- market data (reálná, veřejná) ----------
@@ -66,11 +67,13 @@ class PaperExchange(Exchange):
             return []
         if not self._public.markets:
             self._public.load_markets()
+        spot = self.cfg.is_spot
         return [
             symbol for symbol, market in self._public.markets.items()
-            if market.get("active", True) and market.get("swap")
-            and market.get("quote") == quote and market.get("settle") == quote
-            and not market.get("inverse")
+            if market.get("active", True) and market.get("quote") == quote
+            and (market.get("spot") if spot else
+                 (market.get("swap") and market.get("settle") == quote
+                  and not market.get("inverse")))
         ]
 
     def fetch_tickers(self, symbols: list[str] | None = None) -> dict[str, Any]:

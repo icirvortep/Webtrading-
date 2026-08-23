@@ -79,6 +79,11 @@ class StrategyEngine:
             return Decision(
                 accepted=False, reason=RejectReason.LOW_SCORE, detail="signál neurčuje směr"
             )
+        if side is Side.SHORT and not self.exchange.can_short:
+            return Decision(
+                accepted=False, reason=RejectReason.SYMBOL_BLOCKED,
+                detail="spotový účet neumí short — prodat jde jen to, co vlastníš",
+            )
 
         try:
             snap = self.analyze(signal.symbol, signal.timeframe)

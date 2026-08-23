@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS trades (
     entry REAL NOT NULL,
     exit REAL,
     quantity REAL NOT NULL,
+    qty_open REAL,
+    tp_filled INTEGER NOT NULL DEFAULT 0,
+    realized REAL NOT NULL DEFAULT 0,
     leverage INTEGER,
     stop_loss REAL,
     risk_amount REAL,
@@ -61,6 +64,17 @@ CREATE INDEX IF NOT EXISTS idx_trades_regime ON trades(regime, status);
 """
 
 
+def _plan_stop(raw: str | None) -> float | None:
+    """Původní stop loss z uloženého plánu obchodu."""
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw).get("stop_loss")
+        return float(value) if value else None
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def _utc_day(ts: float | None = None) -> str:
     return datetime.fromtimestamp(ts or time.time(), tz=UTC).strftime("%Y-%m-%d")
 
@@ -79,7 +93,20 @@ class Store:
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Doplní sloupce, které starší databáze ještě nemá."""
+        existing = {row["name"] for row in self._conn.execute("PRAGMA table_info(trades)")}
+        for column, definition in (
+            ("qty_open", "REAL"),
+            ("tp_filled", "INTEGER NOT NULL DEFAULT 0"),
+            ("realized", "REAL NOT NULL DEFAULT 0"),
+        ):
+            if column not in existing:
+                self._conn.execute(f"ALTER TABLE trades ADD COLUMN {column} {definition}")
+        self._conn.execute("UPDATE trades SET qty_open = quantity WHERE qty_open IS NULL")
 
     def close(self) -> None:
         with self._lock:
@@ -122,10 +149,10 @@ class Store:
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO trades (signal_id, symbol, side, regime, opened_at, entry, "
-                "quantity, leverage, stop_loss, risk_amount, status, plan) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,'open',?)",
+                "quantity, qty_open, leverage, stop_loss, risk_amount, status, plan) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,'open',?)",
                 (plan.get("signal_id"), plan["symbol"], plan["side"], plan.get("regime"),
-                 time.time(), entry_price, quantity, plan.get("leverage"),
+                 time.time(), entry_price, quantity, quantity, plan.get("leverage"),
                  plan.get("stop_loss"), plan.get("risk_amount"), json.dumps(plan, default=str)),
             )
             self._conn.commit()
@@ -137,19 +164,42 @@ class Store:
     ) -> None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT entry, stop_loss, quantity FROM trades WHERE id = ?", (trade_id,)
+                "SELECT entry, stop_loss, quantity, realized, plan FROM trades WHERE id = ?",
+                (trade_id,),
             ).fetchone()
+            # k zisku z částečných výstupů se přičte poslední noha obchodu
+            total = float(row["realized"] or 0.0) + pnl if row else pnl
             r_multiple = None
             if row and row["stop_loss"]:
-                risk = abs(row["entry"] - row["stop_loss"]) * row["quantity"]
+                # R se měří k PŮVODNÍMU stopu z plánu — ten aktuální už mohl
+                # odejít na breakeven nebo trailing a R by vyšlo nesmyslně
+                original_stop = _plan_stop(row["plan"]) or row["stop_loss"]
+                risk = abs(row["entry"] - original_stop) * row["quantity"]
                 if risk > 0:
-                    r_multiple = round(pnl / risk, 4)
+                    r_multiple = round(total / risk, 4)
             self._conn.execute(
                 "UPDATE trades SET closed_at=?, exit=?, pnl=?, fees=?, r_multiple=?, "
-                "status='closed', exit_reason=? WHERE id=?",
-                (time.time(), exit_price, pnl, fees, r_multiple, exit_reason, trade_id),
+                "qty_open=0, status='closed', exit_reason=? WHERE id=?",
+                (time.time(), exit_price, total, fees, r_multiple, exit_reason, trade_id),
             )
             self._conn.commit()
+
+    def record_partial_exit(self, trade_id: int, quantity: float, pnl: float) -> float:
+        """Zapíše částečný výstup (zásah TP) a vrátí zbývající množství."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT qty_open, realized FROM trades WHERE id = ?", (trade_id,)
+            ).fetchone()
+            if row is None:
+                return 0.0
+            remaining = max(float(row["qty_open"] or 0.0) - quantity, 0.0)
+            self._conn.execute(
+                "UPDATE trades SET qty_open = ?, tp_filled = tp_filled + 1, realized = ? "
+                "WHERE id = ?",
+                (remaining, float(row["realized"] or 0.0) + pnl, trade_id),
+            )
+            self._conn.commit()
+            return remaining
 
     def update_trade_stop(self, trade_id: int, stop_loss: float) -> None:
         with self._lock:

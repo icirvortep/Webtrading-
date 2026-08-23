@@ -68,7 +68,12 @@ class PositionManager:
         if not open_trades and not self._reconcile_due():
             return
 
-        positions = {p.symbol: p for p in self.exchange.fetch_positions()}
+        if self.exchange.tracks_positions:
+            positions = {p.symbol: p for p in self.exchange.fetch_positions()}
+        else:
+            # Spot: burza pozice nezná, jedinou evidencí je databáze bota.
+            positions = {t["symbol"]: _position_from_trade(t) for t in open_trades}
+
         for trade in open_trades:
             symbol = trade["symbol"]
             position = positions.get(symbol)
@@ -130,12 +135,51 @@ class PositionManager:
 
         if reason and abs(new_stop - current_stop) > entry * 1e-6:
             self._move_stop(trade, position, side, new_stop, reason, progress_r)
+            current_stop = new_stop
+
+        # Když stopy neleží na burze, musí je vyhodnotit bot sám.
+        if not self.cfg.exits.use_exchange_stops and self._run_local_exits(
+            trade, side, price, current_stop, plan
+        ):
+            return
 
         # 3) časový stop
         max_hold = int(plan.get("max_hold_minutes", self.cfg.exits.max_hold_minutes) or 0)
         if max_hold and time.time() - float(trade["opened_at"]) > max_hold * 60:
             log.info("Časový stop na %s po %d min", position.symbol, max_hold)
             self.router.close(position.symbol, reason="time_stop")
+
+    def _run_local_exits(
+        self, trade: dict, side: Side, price: float, stop: float, plan: dict,
+    ) -> bool:
+        """Vyhodnotí SL a TP lokálně. Vrací True, pokud pozice skončila.
+
+        Používá se tam, kde burza reduce-only stop příkazy neumí (spot).
+        Stop se testuje jako první — když by jeden pohyb ceny protnul SL i TP,
+        počítá se ta horší varianta.
+        """
+        hit_stop = price <= stop if side is Side.LONG else price >= stop
+        if hit_stop:
+            log.info("%s: lokální SL na %.6f (cena %.6f)", trade["symbol"], stop, price)
+            self.router.close(trade["symbol"], reason="local_stop_loss")
+            return True
+
+        targets = plan.get("take_profits") or []
+        filled = int(trade["tp_filled"] or 0)
+        for index in range(filled, len(targets)):
+            target = targets[index]
+            reached = (price >= target["price"] if side is Side.LONG
+                       else price <= target["price"])
+            if not reached:
+                break
+            fresh = self.store.open_trades(trade["symbol"])
+            current = next((t for t in fresh if t["id"] == trade["id"]), None)
+            if current is None:
+                return True
+            self.router.take_partial_profit(current, float(target["fraction"]), f"TP{index + 1}")
+            if not self.store.open_trades(trade["symbol"]):
+                return True
+        return False
 
     def _move_stop(
         self, trade: dict, position: Position, side: Side,
@@ -192,6 +236,16 @@ class PositionManager:
                 "Neevidovaná pozice na burze: %s %s %.8f — bot ji neřídí",
                 orphan.symbol, orphan.side.value, orphan.quantity,
             )
+
+
+def _position_from_trade(trade: dict) -> Position:
+    """Pozice odvozená z evidence bota — pro trhy bez pozičního API."""
+    return Position(
+        symbol=trade["symbol"], side=Side(trade["side"]),
+        quantity=float(trade["qty_open"] if trade["qty_open"] is not None else trade["quantity"]),
+        entry_price=float(trade["entry"]), leverage=int(trade["leverage"] or 1),
+        opened_at=float(trade["opened_at"]),
+    )
 
 
 def _plan_of(trade: dict) -> dict:

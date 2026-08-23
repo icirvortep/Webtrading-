@@ -25,6 +25,24 @@ from .strategy.engine import StrategyEngine
 log = logging.getLogger(__name__)
 
 
+def _tracked_position(trade: dict, exchange: Exchange):
+    """Pozice sestavená z evidence bota, včetně dopočítaného průběžného zisku."""
+    from .models import Position, Side
+
+    quantity = float(trade["qty_open"] if trade["qty_open"] is not None else trade["quantity"])
+    side = Side(trade["side"])
+    try:
+        price = float(exchange.fetch_ticker(trade["symbol"]).get("last") or 0.0)
+    except Exception:            # cena je jen pro zobrazení, chyba nesmí shodit status
+        price = float(trade["entry"])
+    return Position(
+        symbol=trade["symbol"], side=side, quantity=quantity,
+        entry_price=float(trade["entry"]), leverage=int(trade["leverage"] or 1),
+        unrealized_pnl=(price - float(trade["entry"])) * quantity * side.sign,
+        opened_at=float(trade["opened_at"]),
+    )
+
+
 class Trader:
     def __init__(self, cfg: AppConfig, exchange: Exchange | None = None, store: Store | None = None) -> None:
         self.cfg = cfg
@@ -92,8 +110,7 @@ class Trader:
             self.router.close(signal.symbol, "signal_reverse")
 
         balance = self.exchange.fetch_balance()
-        open_symbols = [p.symbol for p in self.exchange.fetch_positions()]
-        decision = self.engine.decide(signal, balance, open_symbols)
+        decision = self.engine.decide(signal, balance, self.open_symbols())
 
         if not decision.accepted or decision.plan is None:
             reason = decision.reason.value if decision.reason else "unknown"
@@ -126,11 +143,19 @@ class Trader:
             "plan": plan.as_dict(),
         }
 
+    def open_symbols(self) -> list[str]:
+        """Symboly s otevřenou pozicí — z burzy, nebo z vlastní evidence (spot)."""
+        if self.exchange.tracks_positions:
+            return [p.symbol for p in self.exchange.fetch_positions()]
+        return [t["symbol"] for t in self.store.open_trades()]
+
     # ---------- introspekce ----------
 
     def status(self) -> dict[str, Any]:
         balance = self.exchange.fetch_balance()
         positions = self.exchange.fetch_positions()
+        if not self.exchange.tracks_positions:
+            positions = [_tracked_position(t, self.exchange) for t in self.store.open_trades()]
         return {
             "mode": self.cfg.mode,
             "dry_run": self.cfg.dry_run,

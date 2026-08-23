@@ -19,7 +19,8 @@ symbols_blocklist: []
 
 exchange:
   id: bybit                 # `python -m atb venues` vypíše všechny možnosti
-  account_type: swap        # perpetual futures
+  # swap = perpetual futures, spot = nákup/prodej (nutné pro Bybit EU)
+  account_type: swap
   quote: USDT
   testnet: true             # NEJDŘÍV testnet, teprve pak reálné peníze
   api_key_env: EXCHANGE_API_KEY
