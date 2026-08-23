@@ -47,11 +47,32 @@ class CCXTExchange(Exchange):
                 "adjustForTimeDifference": True,
             },
         })
+        self._check_market_type_supported()
+
         if cfg.testnet:
             if not self.client.has.get("sandbox", True):
                 log.warning("Burza %s testnet oficiálně nepodporuje", cfg.id)
             self.client.set_sandbox_mode(True)
         self._markets: dict[str, Any] = {}
+
+    def _check_market_type_supported(self) -> None:
+        """Ověří, že burza vůbec nabízí požadovaný typ trhu.
+
+        Bez téhle kontroly by se nesoulad projevil až nesrozumitelnou chybou
+        při prvním obchodu — třeba Bybit EU nabízí jen spot a margin, žádné
+        perpetual kontrakty, na kterých je bot postavený.
+        """
+        wanted = self.cfg.account_type
+        if self.client.has.get(wanted):
+            return
+        available = [name for name in ("swap", "future", "spot", "margin")
+                     if self.client.has.get(name)]
+        venue = registry.get(self.cfg.id)
+        detail = f" {venue.notes}" if venue and venue.notes else ""
+        raise ExchangeError(
+            f"Burza {self.cfg.id} nenabízí typ trhu '{wanted}'."
+            f" Dostupné: {', '.join(available) or 'žádné'}.{detail}"
+        )
 
     # ---------- market data ----------
 

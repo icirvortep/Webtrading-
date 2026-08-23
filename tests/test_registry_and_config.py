@@ -145,3 +145,29 @@ def test_default_allowlist_does_not_block_auto_universe():
     """Vyplněný allowlist by tiše zabil automatický výběr trhů."""
     cfg = load_config("config/config.example.yaml")
     assert cfg.symbols_allowlist == []
+
+
+def test_registry_flags_venues_without_perpetuals():
+    """Bybit EU nabízí jen spot a margin — registr to musí říct nahlas."""
+    from atb.exchanges import registry
+
+    assert registry.supports_swap("bybit") is True
+    assert registry.supports_swap("bybiteu") is False
+    assert "perpetual" in registry.get("bybiteu").notes.lower()
+    assert "POZOR" in registry.table()
+
+
+def test_unsupported_market_type_fails_with_a_clear_message(monkeypatch):
+    """Nesoulad typu trhu musí padnout hned a vysvětlit proč."""
+    import ccxt
+
+    from atb.config import ExchangeConfig
+    from atb.exchanges.ccxt_adapter import CCXTExchange, ExchangeError
+
+    monkeypatch.setenv("EXCHANGE_API_KEY", "k")
+    monkeypatch.setenv("EXCHANGE_API_SECRET", "s")
+    assert ccxt.bybiteu().has["swap"] is False, "předpoklad testu už neplatí"
+
+    cfg = ExchangeConfig(id="bybiteu", account_type="swap", testnet=False)
+    with pytest.raises(ExchangeError, match="nenabízí typ trhu"):
+        CCXTExchange(cfg)
