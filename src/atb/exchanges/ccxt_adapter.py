@@ -73,6 +73,28 @@ class CCXTExchange(Exchange):
     def fetch_ticker(self, symbol: str) -> dict[str, Any]:
         return self.client.fetch_ticker(symbol)
 
+    def list_symbols(self, quote: str = "USDT") -> list[str]:
+        if not self._markets:
+            self.load_markets()
+        out = []
+        for symbol, market in self._markets.items():
+            if not market.get("active", True) or not market.get("swap"):
+                continue
+            if market.get("quote") != quote or market.get("settle") != quote:
+                continue
+            if market.get("option") or market.get("inverse"):
+                continue
+            out.append(symbol)
+        return out
+
+    def fetch_tickers(self, symbols: list[str] | None = None) -> dict[str, Any]:
+        """Jeden dotaz na celý trh — Bybit vrací všechny tickery najednou."""
+        try:
+            return self.client.fetch_tickers(symbols)
+        except Exception as exc:
+            log.warning("fetch_tickers selhalo: %s", exc)
+            raise
+
     def fetch_funding_rate(self, symbol: str) -> float:
         if not self.client.has.get("fetchFundingRate"):
             return 0.0

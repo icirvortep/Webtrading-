@@ -62,6 +62,14 @@ class Exchange(ABC):
     def fetch_funding_rate(self, symbol: str) -> float:
         return 0.0
 
+    def list_symbols(self, quote: str = "USDT") -> list[str]:
+        """Všechny aktivní perpetual kontrakty v dané kotační měně."""
+        return []
+
+    def fetch_tickers(self, symbols: list[str] | None = None) -> dict[str, dict[str, Any]]:
+        """Hromadný přehled trhu — jeden dotaz místo stovek."""
+        return {}
+
     def spread_bps(self, symbol: str) -> float:
         ticker = self.fetch_ticker(symbol)
         bid, ask = ticker.get("bid"), ticker.get("ask")

@@ -11,11 +11,10 @@ log_level: INFO
 log_json: false
 database: data/atb.sqlite
 
-# prázdný allowlist = povoleno vše, co burza nabízí
-symbols_allowlist:
-  - BTC/USDT:USDT
-  - ETH/USDT:USDT
-  - SOL/USDT:USDT
+# Prázdný allowlist = povoleno vše, co burza nabízí. Vyplň jen tehdy,
+# když chceš obchodovat výhradně vyjmenované trhy — jinak by omezoval
+# i automatický výběr trhů níže.
+symbols_allowlist: []
 symbols_blocklist: []
 
 exchange:
@@ -104,6 +103,46 @@ exits:
   trail_after_tp: 2             # po TP2 zapni ATR trailing
   max_hold_minutes: 0           # 0 = bez časového stopu
   use_exchange_stops: true      # SL/TP leží přímo na burze (přežijí výpadek bota)
+
+# ------------------------------------------------------------
+#  Výběr trhů: z čeho si robot vybírá
+# ------------------------------------------------------------
+# Bybit nabízí stovky perpetual kontraktů. Projít je všechny v plné hloubce
+# nejde — limity API to nedovolí. Proto dvě fáze: jeden hromadný dotaz na
+# tickery seřadí celou burzu, a hloubkově se analyzuje jen špička žebříčku.
+universe:
+  enabled: true
+  quote: USDT
+  min_volume_24h: 50000000.0      # pod tímto 24h objemem je kniha moc mělká
+  max_spread_bps: 8.0
+  deep_scan_count: 24             # kolik nejlepších trhů projít plnou analýzou
+  batch_size: 8                   # kolik z nich stihnout v jednom kole skenu
+  refresh_minutes: 15.0           # jak často přepočítat žebříček
+  exclude_patterns:               # co nikdy nechceme
+    - "1000000"
+    - "USDC/"
+  weight_liquidity: 0.4           # váhy pro pořadí v žebříčku
+  weight_volatility: 0.35         # (ideál je střední volatilita, ne extrém)
+  weight_momentum: 0.25
+
+# Skener: co běží na pozadí a plní živý přehled
+scanner:
+  enabled: true
+  auto_universe: true             # true = vybírat z celé burzy podle žebříčku výše
+  watchlist:                      # použije se jen když auto_universe: false
+    - BTC/USDT:USDT
+    - ETH/USDT:USDT
+    - SOL/USDT:USDT
+  timeframe: 15m
+  interval_seconds: 20.0
+  autopilot: false                # true = obchodovat z vlastních signálů, bez TradingView
+  min_trigger_strength: 0.5
+
+# Webové rozhraní
+ui:
+  enabled: true
+  refresh_seconds: 3.0
+  bind_localhost_only: true       # rozhraní nemá přihlašování — ven ho nepouštěj
 
 webhook:
   host: 0.0.0.0

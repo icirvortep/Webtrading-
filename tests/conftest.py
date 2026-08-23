@@ -45,6 +45,8 @@ class FakeExchange(Exchange):
         self.orders: list[dict[str, Any]] = []
         self.leverages: dict[str, int] = {}
         self.fail_stop_loss = False
+        self.universe: list[str] = []
+        self.volumes: dict[str, float] = {}
 
     def load_markets(self) -> None:
         return None
@@ -102,6 +104,21 @@ class FakeExchange(Exchange):
 
     def market_limits(self, symbol: str) -> dict[str, float]:
         return {"min_amount": 0.001, "min_cost": 5.0, "max_leverage": 100.0, "contract_size": 1.0}
+
+    def list_symbols(self, quote: str = "USDT") -> list[str]:
+        return self.universe or [f"BTC/{quote}:{quote}", f"ETH/{quote}:{quote}"]
+
+    def fetch_tickers(self, symbols: list[str] | None = None) -> dict[str, Any]:
+        price = float(self._ohlcv[-1][4])
+        out = {}
+        for index, symbol in enumerate(symbols or self.list_symbols()):
+            out[symbol] = {
+                "symbol": symbol, "last": price, "bid": price * 0.9999, "ask": price * 1.0001,
+                "high": price * 1.05, "low": price * 0.95,
+                "quoteVolume": self.volumes.get(symbol, 100_000_000.0 - index * 1_000_000),
+                "percentage": 1.5 + index * 0.1,
+            }
+        return out
 
 
 @pytest.fixture()

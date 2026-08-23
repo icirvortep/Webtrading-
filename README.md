@@ -26,7 +26,8 @@ podle aktuálního režimu trhu a odešle příkazy na burzu s pákovým obchodo
 | **Učení** | Riziko se posouvá podle historické expektance v daném režimu (SQLite historie) |
 | **Živé rozhraní** | Webový dashboard: co robot vidí, proč vstoupil, pozice, historie — a nastavení všeho za běhu |
 | **Autopilot** | Vlastní generátor signálů — funguje bez TradingView i bez veřejné adresy |
-| **Provoz** | Spouštěč pro macOS, offline režim, paper broker, backtest, Telegram notifikace, Docker, 156 testů |
+| **Výběr trhů** | Robot si vybírá ze **všech perpetual kontraktů na burze**, ne z pevného seznamu |
+| **Provoz** | Spouštěč pro macOS, offline režim, paper broker, backtest, Telegram notifikace, Docker, 173 testů |
 
 ---
 
@@ -72,11 +73,34 @@ Změny platí okamžitě, bez restartu, a uloží se do `config/config.yaml`:
 | **Investice a riziko** | % účtu na obchod (výchozí 2 %), tvrdý strop, riziko portfolia, denní stop, max. páka, max. pozic, max. obchodů za den |
 | **Kdy vstoupit** | minimální skóre, zákaz protitrendu, učení z historie, ADX prahy pro trend/range, hranice volatility, násobek vyššího TF |
 | **SL / TP pro každý režim** | SL jako násobek ATR, trailing jako násobek ATR, a **libovolný počet TP** — každý s vlastním násobkem R a podílem pozice; tlačítkem přidáš nebo ubereš stupeň |
-| **Sledované trhy** | seznam symbolů, timeframe, interval skenu, **autopilot**, minimální síla spouštěče |
+| **Sledované trhy** | výběr z celé burzy nebo pevný seznam, minimální objem, počet analyzovaných trhů, velikost dávky, váhy žebříčku, timeframe, interval, **autopilot** |
 | **Ochrany** | pauza po ztrátě, pauza po sérii ztrát, max. spread, časový stop, kill switch |
 
 Citlivá pole (režim, burza, API klíče) rozhraní změnit **nemůže** — mění se
 jen v souboru, aby je nešlo přepnout omylem nebo přes prohlížeč.
+
+### Z čeho si robot vybírá
+
+Ve výchozím nastavení nesleduje pevný seznam, ale **celou nabídku burzy**.
+Bybit má stovky perpetual kontraktů; projít je všechny v plné hloubce každých
+pár vteřin nejde, limity API to nedovolí. Proto výběr probíhá ve dvou fázích:
+
+1. **Hrubé síto** (jednou za 15 minut, jediný dotaz na burzu) — stáhne tickery
+   všech trhů, vyhodí nelikvidní a se širokým spreadem, a zbytek seřadí podle
+   složeného skóre: **likvidita** (0.40) + **volatilita** (0.35) + **denní pohyb**
+   (0.25). U volatility se nehledá maximum, ale optimum — mrtvý trh nedá
+   příležitost, chaotický nedá rozumný stop.
+2. **Hloubková analýza** (každých 20 s) — 24 nejlepších kandidátů projde plnou
+   analýzou režimu, skóre a SL/TP. Nedělá se najednou, ale po dávkách po osmi,
+   takže každý trh se obnoví zhruba jednou za minutu a zátěž vychází na méně
+   než 2 dotazy za sekundu — hluboko pod limity burzy.
+
+Záložka **Příležitosti** ukazuje výsledek: žebříček všech analyzovaných trhů
+seřazený podle nejlepšího nalezeného vstupu, se skóre, směrem, navrženým SL,
+počtem TP a stavem (*připraveno* / *čeká*, včetně důvodu čekání).
+
+Všechny váhy, prahy i počty se dají měnit v Nastavení. Když chceš zpátky pevný
+seznam, stačí vypnout přepínač **Vybírat z celé burzy**.
 
 ### Autopilot vs. TradingView
 
@@ -105,7 +129,7 @@ python -m atb venues                          # přehled burz a jejich páky
 python -m atb analyze BTC/USDT:USDT            # rozbor trhu: režim, skóre, návrh SL/TP
 python -m atb backtest BTC/USDT:USDT --limit 1500
 python -m atb run                              # webhook server v paper režimu
-pytest                                         # 156 testů
+pytest                                         # 173 testů
 ```
 
 Server pak poslouchá na `http://localhost:8080/webhook/tradingview`.
@@ -331,6 +355,7 @@ jsou v `.gitignore`. V živém režimu je webhook secret povinný a `/docs` se v
 src/atb/
 ├── main.py               CLI (demo, run, analyze, backtest, venues, status, close-all)
 ├── scanner.py            skener na pozadí: živý přehled + autopilot
+├── universe.py           výběr a žebříček trhů z celé nabídky burzy
 ├── ui/                   webové rozhraní (HTML/CSS/JS, bez build kroku)
 ├── trader.py             orchestrace: signál → rozhodnutí → exekuce
 ├── config.py             YAML + přepisy z prostředí, validace přes pydantic
@@ -356,7 +381,7 @@ src/atb/
 ## Testy
 
 ```bash
-pytest                      # 156 testů, běží bez sítě proti falešné burze
+pytest                      # 173 testů, běží bez sítě proti falešné burze
 pytest --cov=src/atb        # s pokrytím
 ruff check src tests        # lint
 ```

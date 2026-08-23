@@ -121,3 +121,27 @@ def test_shipped_env_example_loads_into_valid_config(tmp_path, monkeypatch, clea
     assert cfg.mode == "paper"
     assert cfg.risk.risk_per_trade_pct == 2.0
     assert cfg.webhook.port == 8080
+
+
+def test_example_config_documents_every_section():
+    """Ukázkový config musí popisovat všechny sekce, ne jen ty původní."""
+    text = Path("config/config.example.yaml").read_text(encoding="utf-8")
+    for section in ("exchange:", "risk:", "strategy:", "exits:", "universe:",
+                    "scanner:", "ui:", "webhook:", "monitor:", "notify:"):
+        assert section in text, f"v ukázkovém configu chybí sekce {section}"
+
+
+def test_example_config_matches_defaults():
+    """Hodnoty v ukázce musí odpovídat výchozím, jinak dokumentace lže."""
+    shipped = load_config("config/config.example.yaml")
+    defaults = AppConfig()
+    assert shipped.universe.deep_scan_count == defaults.universe.deep_scan_count
+    assert shipped.scanner.auto_universe == defaults.scanner.auto_universe
+    assert shipped.scanner.autopilot is False
+    assert shipped.risk.risk_per_trade_pct == defaults.risk.risk_per_trade_pct
+
+
+def test_default_allowlist_does_not_block_auto_universe():
+    """Vyplněný allowlist by tiše zabil automatický výběr trhů."""
+    cfg = load_config("config/config.example.yaml")
+    assert cfg.symbols_allowlist == []

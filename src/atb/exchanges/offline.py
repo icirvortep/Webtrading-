@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import time
 import zlib
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 
@@ -97,6 +97,37 @@ class OfflineExchange(Exchange):
     def fetch_ticker(self, symbol: str) -> dict[str, Any]:
         price = self._ohlcv_for(symbol, "15m")[-1][4]
         return {"symbol": symbol, "last": price, "bid": price * 0.99995, "ask": price * 1.00005}
+
+    #: simulovaná nabídka burzy — ať jde vyzkoušet i automatický výběr trhů
+    SIMULATED_UNIVERSE: ClassVar[list[str]] = [
+        "BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "AVAX", "LINK", "TON", "DOT",
+        "MATIC", "NEAR", "APT", "ARB", "OP", "SUI", "INJ", "SEI", "TIA", "PEPE",
+        "WIF", "BONK", "LTC", "BCH", "ATOM", "FIL", "RNDR", "AAVE", "UNI", "ETC",
+    ]
+
+    def list_symbols(self, quote: str = "USDT") -> list[str]:
+        return [f"{base}/{quote}:{quote}" for base in self.SIMULATED_UNIVERSE]
+
+    def fetch_tickers(self, symbols: list[str] | None = None) -> dict[str, Any]:
+        """Hromadný přehled — deterministicky odvozený z vygenerovaných řad."""
+        wanted = symbols or self.list_symbols(self.cfg.quote)
+        out: dict[str, Any] = {}
+        for symbol in wanted:
+            series = self._ohlcv_for(symbol, "15m")
+            day = series[-96:] if len(series) >= 96 else series
+            price = day[-1][4]
+            high = max(row[2] for row in day)
+            low = min(row[3] for row in day)
+            first = day[0][1]
+            # objem odvozený od symbolu, aby žebříček nebyl u všech stejný
+            volume = (zlib.crc32(symbol.encode()) % 900 + 100) * 1_000_000.0
+            out[symbol] = {
+                "symbol": symbol, "last": price, "close": price,
+                "bid": price * 0.99995, "ask": price * 1.00005,
+                "high": high, "low": low, "quoteVolume": volume,
+                "percentage": (price - first) / first * 100 if first else 0.0,
+            }
+        return out
 
     def fetch_balance(self) -> Balance:
         unrealized = sum(

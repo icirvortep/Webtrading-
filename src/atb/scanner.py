@@ -18,6 +18,7 @@ from .config import AppConfig
 from .models import Action, Side, Signal
 from .strategy import exits, scoring
 from .strategy import signals as signal_mod
+from .universe import UniverseSelector
 
 log = logging.getLogger(__name__)
 
@@ -26,8 +27,10 @@ class MarketScanner:
     def __init__(self, cfg: AppConfig, trader: Any) -> None:
         self.cfg = cfg
         self.trader = trader
+        self.universe = UniverseSelector(cfg.universe, trader.exchange)
         self.results: dict[str, dict[str, Any]] = {}
         self.last_scan: float = 0.0
+        self._cursor = 0                 # kam jsme se dostali v dávkovém průchodu
         self.last_error: str | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -40,9 +43,11 @@ class MarketScanner:
             return
         self._thread = threading.Thread(target=self._loop, name="market-scanner", daemon=True)
         self._thread.start()
+        source = ("celá burza (automatický výběr)" if self.cfg.scanner.auto_universe
+                  else ", ".join(self.cfg.scanner.watchlist))
         log.info(
             "Skener spuštěn: %s à %.0fs%s",
-            ", ".join(self.cfg.scanner.watchlist), self.cfg.scanner.interval_seconds,
+            source, self.cfg.scanner.interval_seconds,
             " [AUTOPILOT]" if self.cfg.scanner.autopilot else "",
         )
 
@@ -63,8 +68,33 @@ class MarketScanner:
 
     # ---------- jedno kolo ----------
 
+    def watchlist(self) -> list[str]:
+        """Co se má analyzovat — buď pevný seznam, nebo špička žebříčku burzy."""
+        if self.cfg.scanner.auto_universe and self.cfg.universe.enabled:
+            symbols = self.universe.symbols()
+            if symbols:
+                return symbols
+            log.warning("Automatický výběr trhů nic nevrátil, používám pevný watchlist")
+        return list(self.cfg.scanner.watchlist)
+
+    def _batch(self, symbols: list[str]) -> list[str]:
+        """Dávka pro tohle kolo — kandidáti se střídají, ať nepřetečou limity API."""
+        size = max(1, self.cfg.universe.batch_size)
+        if not self.cfg.scanner.auto_universe or len(symbols) <= size:
+            return symbols
+        start = self._cursor % len(symbols)
+        batch = (symbols + symbols)[start:start + size]
+        self._cursor = (start + size) % len(symbols)
+        return batch
+
     def scan_once(self) -> dict[str, dict[str, Any]]:
-        for symbol in list(self.cfg.scanner.watchlist):
+        symbols = self.watchlist()
+        with self._lock:
+            # trhy, které vypadly ze žebříčku, zmizí i z přehledu
+            stale = [s for s in self.results if s not in symbols]
+            for symbol in stale:
+                del self.results[symbol]
+        for symbol in self._batch(symbols):
             try:
                 result = self.scan_symbol(symbol)
             except Exception as exc:  # jeden vadný symbol nesmí zastavit ostatní
@@ -74,6 +104,32 @@ class MarketScanner:
                 self.results[symbol] = result
         self.last_scan = time.time()
         return self.snapshot()
+
+    def opportunities(self, limit: int = 40) -> list[dict[str, Any]]:
+        """Analyzované trhy seřazené podle nejlepší obchodovatelné příležitosti."""
+        rows = []
+        for entry in self.snapshot().values():
+            if "sides" not in entry:
+                continue
+            long_side, short_side = entry["sides"]["long"], entry["sides"]["short"]
+            best = max(long_side, short_side, key=lambda s: s["score"])
+            direction = "long" if best is long_side else "short"
+            rows.append({
+                "symbol": entry["symbol"],
+                "price": entry["market"]["price"],
+                "regime": entry["market"]["regime"],
+                "atr_pct": entry["market"]["atr_pct"],
+                "side": direction,
+                "score": best["score"],
+                "tradeable": best["tradeable"],
+                "veto": best["veto"],
+                "stop_pct": best["stop_pct"],
+                "take_profits": len(best["take_profits"]),
+                "triggers": entry["triggers"],
+                "age_seconds": round(time.time() - entry["ts"], 1),
+            })
+        rows.sort(key=lambda r: (r["tradeable"], r["score"]), reverse=True)
+        return rows[:limit]
 
     def scan_symbol(self, symbol: str) -> dict[str, Any]:
         cfg = self.cfg
@@ -155,7 +211,10 @@ class MarketScanner:
             "autopilot": self.cfg.scanner.autopilot,
             "timeframe": self.cfg.scanner.timeframe,
             "interval_seconds": self.cfg.scanner.interval_seconds,
-            "watchlist": list(self.cfg.scanner.watchlist),
+            "auto_universe": self.cfg.scanner.auto_universe,
+            "watchlist": self.watchlist(),
+            "universe": self.universe.state(),
+            "opportunities": self.opportunities(),
             "last_scan": self.last_scan,
             "age_seconds": round(time.time() - self.last_scan, 1) if self.last_scan else None,
             "last_error": self.last_error,

@@ -108,6 +108,32 @@ class ExitConfig(BaseModel):
     use_exchange_stops: bool = True        # posílat SL/TP přímo na burzu
 
 
+class UniverseConfig(BaseModel):
+    """Automatický výběr trhů ze všech, co burza nabízí.
+
+    Skenovat stovky symbolů v plné hloubce nejde — limity API to nedovolí.
+    Proto dvě fáze: jeden hromadný dotaz na tickery seřadí celý trh podle
+    likvidity, volatility a pohybu, a do hluboké analýzy jde jen špička.
+    """
+
+    enabled: bool = True
+    quote: str = "USDT"
+    #: minimální 24h objem v kotační měně — pod tím je kniha příliš mělká
+    min_volume_24h: float = 50_000_000.0
+    max_spread_bps: float = 8.0
+    #: kolik nejlepších kandidátů projít plnou analýzou
+    deep_scan_count: int = 24
+    #: kolik z nich stihnout v jednom kole (zbytek přijde na řadu v dalším)
+    batch_size: int = 8
+    refresh_minutes: float = 15.0
+    #: symboly, které nikdy nechceme (např. pákové tokeny)
+    exclude_patterns: list[str] = Field(default_factory=lambda: ["1000000", "USDC/"])
+    #: váhy pro pořadí kandidátů, součet nemusí být 1
+    weight_liquidity: float = 0.4
+    weight_volatility: float = 0.35
+    weight_momentum: float = 0.25
+
+
 class ScannerConfig(BaseModel):
     """Průběžné skenování trhu — zdroj živého přehledu i vlastních signálů."""
 
@@ -117,6 +143,8 @@ class ScannerConfig(BaseModel):
     ])
     timeframe: str = "15m"
     interval_seconds: float = 20.0
+    #: automaticky vybírat trhy z celé burzy místo pevného watchlistu
+    auto_universe: bool = True
     #: autopilot = bot obchoduje z vlastních signálů, bez TradingView
     autopilot: bool = False
     min_trigger_strength: float = 0.5
@@ -168,6 +196,7 @@ class AppConfig(BaseModel):
     risk: RiskConfig = Field(default_factory=RiskConfig)
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
     exits: ExitConfig = Field(default_factory=ExitConfig)
+    universe: UniverseConfig = Field(default_factory=UniverseConfig)
     scanner: ScannerConfig = Field(default_factory=ScannerConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
     webhook: WebhookConfig = Field(default_factory=WebhookConfig)
@@ -263,6 +292,16 @@ EDITABLE_PATHS: tuple[tuple[str, ...], ...] = (
     ("exits", "trail_after_tp"),
     ("exits", "max_hold_minutes"),
     ("scanner", "watchlist"),
+    ("scanner", "auto_universe"),
+    ("universe", "enabled"),
+    ("universe", "min_volume_24h"),
+    ("universe", "max_spread_bps"),
+    ("universe", "deep_scan_count"),
+    ("universe", "batch_size"),
+    ("universe", "refresh_minutes"),
+    ("universe", "weight_liquidity"),
+    ("universe", "weight_volatility"),
+    ("universe", "weight_momentum"),
     ("scanner", "timeframe"),
     ("scanner", "interval_seconds"),
     ("scanner", "autopilot"),

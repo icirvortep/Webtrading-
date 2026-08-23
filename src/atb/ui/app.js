@@ -41,6 +41,7 @@ async function refresh() {
 function render() {
   renderHeader();
   renderMarkets();
+  renderOpportunities();
   renderPositions();
   renderSignals();
   renderHistory();
@@ -145,6 +146,50 @@ function sparkline(points) {
   </svg>`;
 }
 
+function renderOpportunities() {
+  const scanner = state.scanner;
+  const universe = scanner.universe || {};
+  $("universeInfo").textContent = scanner.auto_universe
+    ? `${universe.eligible ?? 0} trhů prošlo filtrem z ${universe.total_markets ?? 0} na burze`
+      + ` · hloubkově se analyzuje ${universe.deep_scan_count} nejlepších`
+      + (universe.age_minutes !== null && universe.age_minutes !== undefined
+         ? ` · žebříček přepočten před ${fmt(universe.age_minutes, 0)} min` : "")
+    : "automatický výběr je vypnutý — sleduje se pevný watchlist";
+
+  const rows = scanner.opportunities || [];
+  if (!rows.length) {
+    $("opportunities").innerHTML = '<div class="empty">Skener ještě nemá dost dat. Chvíli to potrvá — trhy se analyzují po dávkách.</div>';
+    return;
+  }
+  $("opportunities").innerHTML = `<table><thead><tr>
+    <th>Symbol</th><th>Cena</th><th>Režim</th><th>ATR</th><th>Nejlepší směr</th>
+    <th>Skóre</th><th>SL</th><th>TP</th><th>Stav</th><th>Spouštěč</th>
+    </tr></thead><tbody>
+    ${rows.map((r) => `<tr>
+      <td>${r.symbol}</td>
+      <td>${fmt(r.price, priceDigits(r.price))}</td>
+      <td><span class="badge ${r.regime}">${regimeLabel(r.regime)}</span></td>
+      <td>${pct(r.atr_pct)}</td>
+      <td class="${r.side === "long" ? "pos" : "neg"}">${r.side.toUpperCase()}</td>
+      <td>${scoreCell(r.score)}</td>
+      <td>${pct(r.stop_pct)}</td>
+      <td>${r.take_profits}×</td>
+      <td>${r.tradeable
+        ? '<span class="pill ok">připraveno</span>'
+        : `<span class="pill no" title="${escapeHtml(r.veto || "skóre pod prahem")}">čeká</span>`}</td>
+      <td style="font-family:inherit">${r.triggers.length
+        ? r.triggers.map((t) => escapeHtml(t.kind)).join(", ") : "—"}</td>
+    </tr>`).join("")}</tbody></table>`;
+}
+
+function scoreCell(score) {
+  const width = Math.round(score * 100);
+  const color = score >= 0.6 ? "var(--long)" : score >= 0.4 ? "var(--warn)" : "var(--muted)";
+  return `<div style="display:flex;align-items:center;gap:6px">
+    <div class="score-bar" style="width:52px;margin:0"><div class="score-fill"
+      style="width:${width}%;background:${color}"></div></div>${fmt(score, 3)}</div>`;
+}
+
 function renderPositions() {
   const rows = state.account.open_positions;
   if (!rows.length) {
@@ -241,7 +286,16 @@ const GROUPS = [
   {
     title: "Sledované trhy", note: "Co skener prochází a jak často.",
     fields: [
-      ["scanner.watchlist", "Symboly", "Oddělené čárkou, formát BTC/USDT:USDT", "list"],
+      ["scanner.auto_universe", "Vybírat z celé burzy", "Vypnuto = jede jen pevný seznam níže", "bool"],
+      ["universe.min_volume_24h", "Minimální 24h objem", "Pod tím je kniha moc mělká", "number", 1000000],
+      ["universe.deep_scan_count", "Kolik trhů analyzovat", "Špička žebříčku", "number", 1],
+      ["universe.batch_size", "Trhů na jedno kolo", "Menší číslo = šetrnější k limitům API", "number", 1],
+      ["universe.refresh_minutes", "Přepočet žebříčku (min)", "", "number", 5],
+      ["universe.max_spread_bps", "Max. spread pro výběr (bps)", "", "number", 1],
+      ["universe.weight_liquidity", "Váha likvidity", "Jak moc rozhoduje objem", "number", 0.05],
+      ["universe.weight_volatility", "Váha volatility", "Ideál je střední pohyb", "number", 0.05],
+      ["universe.weight_momentum", "Váha pohybu", "Jak moc rozhoduje denní změna", "number", 0.05],
+      ["scanner.watchlist", "Pevný seznam", "Použije se, když je výběr z burzy vypnutý", "list"],
       ["scanner.timeframe", "Timeframe", "1m, 5m, 15m, 1h, 4h…", "text"],
       ["scanner.interval_seconds", "Interval skenu (s)", "", "number", 5],
       ["scanner.autopilot", "AUTOPILOT", "Obchodovat z vlastních signálů, bez TradingView", "bool"],

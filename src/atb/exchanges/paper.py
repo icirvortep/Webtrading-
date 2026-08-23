@@ -61,6 +61,23 @@ class PaperExchange(Exchange):
         self._price_cache[symbol] = (now, float(ticker.get("last") or 0.0))
         return ticker
 
+    def list_symbols(self, quote: str = "USDT") -> list[str]:
+        if self._public is None:
+            return []
+        if not self._public.markets:
+            self._public.load_markets()
+        return [
+            symbol for symbol, market in self._public.markets.items()
+            if market.get("active", True) and market.get("swap")
+            and market.get("quote") == quote and market.get("settle") == quote
+            and not market.get("inverse")
+        ]
+
+    def fetch_tickers(self, symbols: list[str] | None = None) -> dict[str, Any]:
+        if self._public is None:
+            return {}
+        return self._public.fetch_tickers(symbols)
+
     def mark_price(self, symbol: str) -> float:
         return float(self.fetch_ticker(symbol).get("last") or 0.0)
 
