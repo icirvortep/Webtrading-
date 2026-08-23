@@ -338,6 +338,64 @@ JSON s `action` a `symbol`.
 
 ---
 
+## Napojení vlastního účtu na Bybit
+
+### 1. Klíče do `.env`
+
+```bash
+cd ~/AdaptiveTradingBot
+cp .env.example .env
+open -e .env          # otevře v TextEditu
+```
+
+Vyplň dva řádky a ulož:
+
+```
+EXCHANGE_API_KEY=tvůj_klíč
+EXCHANGE_API_SECRET=tvůj_secret
+```
+
+Soubor `.env` je v `.gitignore`, takže se nikdy nedostane do repozitáře.
+Secret ti Bybit ukáže **jen jednou** při vytvoření klíče.
+
+### 2. Burza a typ účtu v `config/config.yaml`
+
+```yaml
+exchange:
+  id: bybiteu           # bybit = globální (perpetuály), bybiteu = EU (jen spot)
+  account_type: spot    # spot pro Bybit EU, swap pro globální
+  testnet: false
+```
+
+### 3. Obchodování ze všech měn
+
+Tohle je **výchozí chování** — pevný seznam tří symbolů je jen záloha pro
+případ, že automatický výběr vypneš:
+
+```yaml
+symbols_allowlist: []   # prázdné = povoleno vše, co burza nabízí
+scanner:
+  auto_universe: true   # vybírat z celé burzy
+universe:
+  min_volume_24h: 50000000.0   # ← tohle si na menší burze uprav
+  deep_scan_count: 24          # kolik nejlepších analyzovat do hloubky
+```
+
+> **Bybit EU má výrazně nižší objemy než globální burza.** Když v logu uvidíš
+> „Filtrem prošlo jen N trhů", sniž `min_volume_24h` — třeba na `1000000`.
+> Měnit to jde přímo v Nastavení v rozhraní, bez restartu.
+
+### 4. Postup zapnutí
+
+```
+1) PAPER na reálných datech   ← nech běžet dny, sleduj záložku Rozhodnutí
+2) mode: live, dry_run: true  ← počítá plán, nic neodesílá
+3) mode: live, dry_run: false ← ostrý provoz, vyžádá si potvrzení v konzoli
+```
+
+V rozhraní si před krokem 3 sniž `risk_per_trade_pct` na 0.5 %, ať první
+reálné obchody nic nestojí, a zvyš to až po pár desítkách obchodů.
+
 ## Ostrý provoz
 
 ```bash

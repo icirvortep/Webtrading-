@@ -107,6 +107,12 @@ class UniverseSelector:
         self.candidates = self._rank(rows)
         self.last_refresh = time.time()
         self.last_error = None
+        if self.total_markets and len(self.candidates) < min(3, self.cfg.deep_scan_count):
+            log.warning(
+                "Filtrem prošlo jen %d trhů z %d. Na menších burzách bývá "
+                "universe.min_volume_24h (%.0f) příliš vysoký — sniž ho v Nastavení.",
+                len(self.candidates), self.total_markets, self.cfg.min_volume_24h,
+            )
         log.info(
             "Žebříček trhů: %d z %d prošlo filtrem, top 5: %s",
             len(self.candidates), self.total_markets,

@@ -196,3 +196,37 @@ def test_scanner_still_offers_both_directions_on_perpetuals(config, exchange):
     entry = trader.scanner.scan_symbol("BTC/USDT:USDT")
     assert set(entry["sides"]) == {"long", "short"}
     trader.shutdown()
+
+
+# ---------- záložní seznam trhů ----------
+
+def test_fallback_watchlist_is_converted_to_spot_format(spot_trader, monkeypatch):
+    """Perpetual zápis v configu by na spotu ukazoval na neexistující trh."""
+    monkeypatch.setattr(spot_trader.scanner.universe, "symbols", lambda limit=None: [])
+    spot_trader.cfg.scanner.auto_universe = True
+    spot_trader.cfg.scanner.watchlist = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+    assert spot_trader.scanner.watchlist() == ["BTC/USDT", "ETH/USDT"]
+
+
+def test_fallback_watchlist_keeps_perpetual_format(config, exchange, monkeypatch):
+    config.strategy.adaptive_learning = False
+    config.scanner.enabled = False
+    config.scanner.watchlist = ["BTC/USDT"]
+    trader = Trader(config, exchange=exchange, store=Store(":memory:"))
+    monkeypatch.setattr(trader.scanner.universe, "symbols", lambda limit=None: [])
+    assert trader.scanner.watchlist() == ["BTC/USDT:USDT"]
+    trader.shutdown()
+
+
+def test_volume_filter_warns_when_it_empties_the_universe(caplog):
+    """Na menší burze je výchozí práh objemu moc vysoký — musí to říct nahlas."""
+    from atb.config import UniverseConfig
+    from atb.universe import UniverseSelector
+
+    exchange = FakeExchange()
+    exchange.universe = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+    exchange.volumes = dict.fromkeys(exchange.universe, 1_000_000.0)
+    selector = UniverseSelector(UniverseConfig(min_volume_24h=50_000_000.0), exchange)
+    with caplog.at_level("WARNING"):
+        selector.refresh()
+    assert "min_volume_24h" in caplog.text

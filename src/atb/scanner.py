@@ -23,6 +23,22 @@ from .universe import UniverseSelector
 log = logging.getLogger(__name__)
 
 
+def _for_market_type(symbol: str, account_type: str) -> str:
+    """Sladí zápis symbolu s typem účtu.
+
+    Pevný watchlist je v konfiguraci zapsaný jednou, ale spot používá
+    'BTC/USDT' a perpetuály 'BTC/USDT:USDT'. Bez tohohle by záložní seznam
+    na spotovém účtu odkazoval na neexistující trhy.
+    """
+    base = symbol.split(":")[0]
+    if account_type == "spot":
+        return base
+    if ":" in symbol:
+        return symbol
+    quote = base.split("/")[-1]
+    return f"{base}:{quote}"
+
+
 class MarketScanner:
     def __init__(self, cfg: AppConfig, trader: Any) -> None:
         self.cfg = cfg
@@ -74,8 +90,13 @@ class MarketScanner:
             symbols = self.universe.symbols()
             if symbols:
                 return symbols
-            log.warning("Automatický výběr trhů nic nevrátil, používám pevný watchlist")
-        return list(self.cfg.scanner.watchlist)
+            log.warning(
+                "Automatický výběr trhů nic nevrátil — sáhnu po pevném seznamu. "
+                "Nejčastější příčina: universe.min_volume_24h je pro tuhle burzu "
+                "příliš vysoký (teď %.0f).", self.cfg.universe.min_volume_24h,
+            )
+        return [_for_market_type(s, self.cfg.exchange.account_type)
+                for s in self.cfg.scanner.watchlist]
 
     def _batch(self, symbols: list[str]) -> list[str]:
         """Dávka pro tohle kolo — kandidáti se střídají, ať nepřetečou limity API."""
