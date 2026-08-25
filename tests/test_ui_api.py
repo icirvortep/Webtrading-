@@ -129,3 +129,19 @@ def test_ui_asset_route_blocks_path_traversal(client):
 def test_close_endpoint_reports_result(client):
     body = client.post("/api/close/BTC%2FUSDT%3AUSDT").json()
     assert body["ok"] is True
+
+
+def test_quote_currency_is_editable_from_the_ui(client):
+    """Přepnutí na USDC nemá vyžadovat editaci souborů v terminálu."""
+    response = client.put("/api/settings", json={"exchange.quote": "USDC"})
+    assert response.status_code == 200
+    assert client.trader.cfg.exchange.quote == "USDC"
+    # hledané trhy se musí strhnout, jinak by skener sháněl USDT páry
+    assert client.trader.cfg.universe.quotes == ["USDC"]
+
+
+def test_explicit_quotes_survive_a_currency_change(client):
+    client.put("/api/settings", json={
+        "exchange.quote": "USDC", "universe.quotes": ["USDC", "USDT"],
+    })
+    assert client.trader.cfg.universe.quotes == ["USDC", "USDT"]

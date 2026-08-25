@@ -28,7 +28,7 @@ podle aktuálního režimu trhu a odešle příkazy na burzu s pákovým obchodo
 | **Živé rozhraní** | Webový dashboard: co robot vidí, proč vstoupil, pozice, historie — a nastavení všeho za běhu |
 | **Autopilot** | Vlastní generátor signálů — funguje bez TradingView i bez veřejné adresy |
 | **Výběr trhů** | Robot si vybírá ze **všech perpetual kontraktů na burze**, ne z pevného seznamu |
-| **Provoz** | Aplikace pro macOS s ikonou, offline režim, paper broker, backtest, Telegram notifikace, Docker, 217 testů |
+| **Provoz** | Aplikace pro macOS s ikonou, offline režim, paper broker, backtest, Telegram notifikace, Docker, 236 testů |
 
 ---
 
@@ -47,8 +47,9 @@ Terminál nepotřebuješ — stačí dvojklik.
 > Kdyby macOS při prvním spuštění hlásil „od neověřeného vývojáře": klikni na
 > ikonu pravým tlačítkem → *Otevřít* → *Otevřít*. Stačí jednou.
 
-Aktualizace na novou verzi: `cd ~/AdaptiveTradingBot && git pull`.
-Ikonu na ploše měnit nemusíš, ukazuje na tutéž složku.
+**Aktualizace řeší aplikace sama.** Při každém spuštění zkontroluje novou
+verzi, stáhne ji a tvoje nastavení i `.env` s klíči nechá být. Žádné příkazy
+v terminálu. Vypnout to jde přes `ATB_SKIP_UPDATE=1`.
 
 Aplikace jde spustit i bez instalace — dvojklikem na `start-mac.command`
 přímo ve složce, nebo z Terminálu `./start-mac.command`.
@@ -158,7 +159,7 @@ python -m atb venues                          # přehled burz a jejich páky
 python -m atb analyze BTC/USDT:USDT            # rozbor trhu: režim, skóre, návrh SL/TP
 python -m atb backtest BTC/USDT:USDT --limit 1500
 python -m atb run                              # webhook server v paper režimu
-pytest                                         # 217 testů
+pytest                                         # 236 testů
 ```
 
 Server pak poslouchá na `http://localhost:8080/webhook/tradingview`.
@@ -534,7 +535,7 @@ start-mac.command              spuštění bez instalace
 ## Testy
 
 ```bash
-pytest                      # 217 testů, běží bez sítě proti falešné burze
+pytest                      # 236 testů, běží bez sítě proti falešné burze
 pytest --cov=src/atb        # s pokrytím
 ruff check src tests scripts   # lint
 ```

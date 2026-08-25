@@ -286,6 +286,7 @@ const GROUPS = [
   {
     title: "Sledované trhy", note: "Co skener prochází a jak často.",
     fields: [
+      ["exchange.quote", "Měna účtu", "Co na burze držíš — USDT, USDC…", "text"],
       ["scanner.auto_universe", "Vybírat z celé burzy", "Vypnuto = jede jen pevný seznam níže", "bool"],
       ["universe.min_volume_24h", "Minimální 24h objem", "Pod tím je kniha moc mělká", "number", 1000000],
       ["universe.deep_scan_count", "Kolik trhů analyzovat", "Špička žebříčku", "number", 1],

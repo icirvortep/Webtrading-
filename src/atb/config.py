@@ -309,6 +309,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
 
 #: pole, která smí měnit uživatelské rozhraní (zbytek vyžaduje restart a ruční zásah)
 EDITABLE_PATHS: tuple[tuple[str, ...], ...] = (
+    ("exchange", "quote"),
     ("risk", "risk_per_trade_pct"),
     ("risk", "max_risk_per_trade_pct"),
     ("risk", "max_portfolio_risk_pct"),
@@ -394,6 +395,11 @@ def apply_updates_inplace(cfg: AppConfig, updates: dict[str, Any]) -> AppConfig:
         for key in path[:-1]:
             target = getattr(target, key)
         setattr(target, path[-1], _get_path(validated, path))
+
+    # Změna měny účtu musí strhnout i hledané trhy, jinak by skener sháněl
+    # páry, na které uživatel nemá čím zaplatit.
+    if "exchange.quote" in updates and "universe.quotes" not in updates:
+        cfg.universe.quotes = [cfg.exchange.quote]
     return cfg
 
 
