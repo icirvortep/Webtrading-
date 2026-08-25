@@ -104,3 +104,47 @@ def test_preflight_reports_unsupported_market_type(capsys, monkeypatch, clean_en
     )
     assert main(["--config", str(cfg), "preflight"]) == 1
     assert "nenabízí typ trhu" in capsys.readouterr().out
+
+
+def test_preflight_lists_market_counts_per_quote(monkeypatch, capsys, clean_env, tmp_path):
+    """Kolik trhů má která měna — podklad pro rozhodnutí, v čem držet peníze."""
+    from atb.exchanges import ccxt_adapter
+
+    monkeypatch.setenv("EXCHANGE_API_KEY", "k")
+    monkeypatch.setenv("EXCHANGE_API_SECRET", "s")
+
+    class Stub:
+        def __init__(self, cfg):
+            self.cfg = cfg
+            self.id = cfg.id
+            self.tracks_positions = False
+
+        def load_markets(self):
+            return None
+
+        def list_symbols(self, quote="USDT"):
+            return {"USDT": [f"C{i}/USDT" for i in range(700)],
+                    "USDC": [f"C{i}/USDC" for i in range(12)]}.get(quote, [])
+
+        def fetch_balance(self):
+            from atb.models import Balance
+            return Balance(equity=114.0, free=114.0, currency="USDC")
+
+        def market_limits(self, symbol):
+            return {"min_cost": 1.0, "min_amount": 0.0, "max_leverage": 1.0,
+                    "contract_size": 1.0}
+
+        def fetch_ticker(self, symbol):
+            return {"last": 100.0}
+
+    monkeypatch.setattr(ccxt_adapter, "CCXTExchange", Stub)
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "exchange:\n  id: bybiteu\n  account_type: spot\n  quote: USDC\n  testnet: false\n",
+        encoding="utf-8",
+    )
+    main(["--config", str(cfg), "preflight"])
+    output = capsys.readouterr().out
+    assert "700 trhů" in output
+    assert "12 trhů" in output
+    assert "tvoje měna" in output

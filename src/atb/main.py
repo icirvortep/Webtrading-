@@ -179,6 +179,19 @@ def cmd_preflight(cfg: AppConfig, args: argparse.Namespace) -> int:
         return 1
     print(f"      příklad: {', '.join(symbols[:4])}")
 
+    # Kolik trhů nabízí která kotační měna — podklad pro rozhodnutí,
+    # v čem na burze držet peníze.
+    print("\n  Nabídka trhů podle měny, ve které bys platil:")
+    counts = []
+    for candidate in ("USDT", "USDC", "EUR", "BTC"):
+        try:
+            counts.append((candidate, len(exchange.list_symbols(candidate))))
+        except Exception:      # měna, kterou burza nezná, prostě přeskočíme
+            continue
+    for name, count in sorted(counts, key=lambda item: item[1], reverse=True):
+        mark = " ← tvoje měna" if name == cfg.exchange.quote else ""
+        print(f"      {name:<6} {count:>4} trhů{mark}")
+
     try:
         balance = exchange.fetch_balance()
     except Exception as exc:
