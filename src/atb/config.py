@@ -127,7 +127,9 @@ class UniverseConfig(BaseModel):
     """
 
     enabled: bool = True
-    quote: str = "USDT"
+    #: Kotační měny, ve kterých hledat trhy. Prázdné = použije se měna účtu.
+    #: Obchodovat v jiné měně jde jen tehdy, když ji na burze skutečně držíš.
+    quotes: list[str] = Field(default_factory=list)
     #: minimální 24h objem v kotační měně — pod tím je kniha příliš mělká
     min_volume_24h: float = 50_000_000.0
     max_spread_bps: float = 8.0
@@ -224,9 +226,16 @@ class AppConfig(BaseModel):
         Bez toho by risk manager počítal páku, kterou burza neumí nastavit,
         a router by posílal stop příkazy, které spotový účet odmítne.
         """
+        if not self.universe.quotes:
+            self.universe.quotes = [self.exchange.quote]
         if self.exchange.is_spot:
             self.risk.max_leverage = 1
             self.risk.min_leverage = 1
+            # Bez páky nejde koupit za víc, než máš na účtu. Rezerva kryje
+            # poplatky a pohyb ceny mezi výpočtem a plněním příkazu.
+            self.risk.max_notional_pct_of_equity = min(
+                self.risk.max_notional_pct_of_equity, 95.0
+            )
             # spotové SL/TP si hlídá bot sám (viz PositionManager)
             self.exits.use_exchange_stops = False
         return self
@@ -280,6 +289,14 @@ def _set_path(data: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
 def load_config(path: str | Path | None = None) -> AppConfig:
     """Načte YAML konfiguraci a aplikuje přepisy z prostředí."""
     cfg_path = Path(path) if path else DEFAULT_CONFIG_PATH
+    if not cfg_path.exists():
+        # Vlastní konfigurace se needituje v gitu — při prvním spuštění se
+        # vyrobí z okomentované ukázky, aby ji šlo měnit bez konfliktů.
+        example = cfg_path.with_name("config.example.yaml")
+        if example.exists():
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            cfg_path.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+
     data: dict[str, Any] = {}
     if cfg_path.exists():
         data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
@@ -322,6 +339,7 @@ EDITABLE_PATHS: tuple[tuple[str, ...], ...] = (
     ("scanner", "watchlist"),
     ("scanner", "auto_universe"),
     ("universe", "enabled"),
+    ("universe", "quotes"),
     ("universe", "min_volume_24h"),
     ("universe", "adaptive_filters"),
     ("universe", "max_spread_bps"),

@@ -118,6 +118,7 @@ class UniverseSelector:
     def state(self) -> dict[str, Any]:
         return {
             "enabled": self.cfg.enabled,
+            "quotes": list(self.cfg.quotes),
             "total_markets": self.total_markets,
             "filtered_out": self.filtered_out,
             "eligible": len(self.candidates),
@@ -133,9 +134,13 @@ class UniverseSelector:
     # ---------- interní ----------
 
     def _tradable_symbols(self) -> list[str]:
-        """Aktivní perpetual kontrakty v kotační měně, bez vyloučených vzorů."""
-        symbols = self.exchange.list_symbols(quote=self.cfg.quote)
-        return [s for s in symbols if not self._excluded(s)]
+        """Aktivní trhy ve všech nastavených kotačních měnách."""
+        seen: list[str] = []
+        for quote in self.cfg.quotes or ["USDT"]:
+            for symbol in self.exchange.list_symbols(quote=quote):
+                if not self._excluded(symbol) and symbol not in seen:
+                    seen.append(symbol)
+        return seen
 
     def _excluded(self, symbol: str) -> bool:
         return any(pattern in symbol for pattern in self.cfg.exclude_patterns)

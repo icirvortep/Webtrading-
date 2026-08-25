@@ -358,14 +358,28 @@ EXCHANGE_API_SECRET=tvůj_secret
 Soubor `.env` je v `.gitignore`, takže se nikdy nedostane do repozitáře.
 Secret ti Bybit ukáže **jen jednou** při vytvoření klíče.
 
-### 2. Burza a typ účtu v `config/config.yaml`
+### 2. Burza, typ účtu a měna v `config/config.yaml`
 
 ```yaml
 exchange:
   id: bybiteu           # bybit = globální (perpetuály), bybiteu = EU (jen spot)
   account_type: spot    # spot pro Bybit EU, swap pro globální
+  quote: USDC           # ← měna, kterou na burze skutečně držíš
   testnet: false
 ```
+
+`quote` musí sedět s tím, co máš na účtu. Držíš-li USDC, bot hledá páry
+`BTC/USDC`, `ETH/USDC` a spol. — za USDC se USDT pár nekoupí. Skener převezme
+měnu automaticky; obchodovat ve víc měnách naráz jde přes `universe.quotes`,
+ale jen když je opravdu držíš:
+
+```yaml
+universe:
+  quotes: [USDC, USDT]   # prázdné = převezme se exchange.quote
+```
+
+> **Soubor `config/config.yaml` není v gitu** — vyrobí se při prvním spuštění
+> z `config.example.yaml`. Tvoje nastavení tak přežije každý `git pull`.
 
 ### 3. Obchodování ze všech měn
 

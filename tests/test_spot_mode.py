@@ -230,3 +230,43 @@ def test_volume_filter_warns_when_it_empties_the_universe(caplog):
     with caplog.at_level("WARNING"):
         selector.refresh()
     assert "min_volume_24h" in caplog.text
+
+
+def test_spot_cannot_size_above_available_cash():
+    """Bez páky se nedá koupit za víc, než máš — strop 500 % je nesmysl."""
+    cfg = AppConfig.model_validate({
+        "exchange": {"id": "bybiteu", "account_type": "spot"},
+        "risk": {"max_notional_pct_of_equity": 500.0},
+    })
+    assert cfg.risk.max_notional_pct_of_equity <= 95.0
+
+
+def test_perpetual_keeps_its_notional_headroom():
+    cfg = AppConfig.model_validate({"risk": {"max_notional_pct_of_equity": 500.0}})
+    assert cfg.risk.max_notional_pct_of_equity == 500.0
+
+
+def test_small_account_position_is_capped_by_cash(spot_config):
+    """114 USDC, riziko 2 %, stop 1 % → chtělo by 228; smí jen do hotovosti."""
+    from atb.models import Balance, MarketSnapshot, Regime
+    from atb.risk.manager import RiskManager
+    from atb.strategy import scoring
+
+    store = Store(":memory:")
+    manager = RiskManager(spot_config, store)
+    snapshot = MarketSnapshot(
+        symbol="BTC/USDC", timeframe="15m", price=100.0, atr=0.5, atr_pct=0.5,
+        adx=30.0, ema_fast=101.0, ema_slow=99.0, rsi=55.0, bb_width=3.0,
+        volume_z=0.4, realized_vol=0.01, htf_trend=1, regime=Regime.TREND_UP,
+        trend_strength=0.85,
+    )
+    balance = Balance(equity=114.0, free=114.0, currency="USDC")
+    decision = manager.build_plan(
+        buy("BTC/USDC"), Side.LONG, snapshot, balance,
+        scoring.Score(value=1.0, reasons=[]),
+        {"min_amount": 0.0, "min_cost": 1.0, "max_leverage": 1.0, "contract_size": 1.0},
+    )
+    assert decision.accepted, decision.detail
+    assert decision.plan.notional <= 114.0
+    assert decision.plan.leverage == 1
+    store.close()

@@ -171,3 +171,40 @@ def test_unsupported_market_type_fails_with_a_clear_message(monkeypatch):
     cfg = ExchangeConfig(id="bybiteu", account_type="swap", testnet=False)
     with pytest.raises(ExchangeError, match="nenabízí typ trhu"):
         CCXTExchange(cfg)
+
+
+def test_universe_quote_defaults_to_the_account_currency():
+    """Nesoulad měn by tiše hledal trhy, na které nemáš čím zaplatit."""
+    cfg = AppConfig.model_validate({"exchange": {"quote": "USDC"}})
+    assert cfg.universe.quotes == ["USDC"]
+
+
+def test_universe_can_span_several_quote_currencies():
+    cfg = AppConfig.model_validate({
+        "exchange": {"quote": "USDC"}, "universe": {"quotes": ["USDC", "USDT"]},
+    })
+    assert cfg.universe.quotes == ["USDC", "USDT"]
+
+
+def test_missing_config_is_created_from_the_example(tmp_path):
+    """Vlastní nastavení není v gitu — musí vzniknout samo, jinak nic nenajede."""
+    import shutil
+
+    target = tmp_path / "config.yaml"
+    shutil.copy("config/config.example.yaml", tmp_path / "config.example.yaml")
+    assert not target.exists()
+
+    cfg = load_config(target)
+    assert target.exists()
+    assert cfg.risk.risk_per_trade_pct == 2.0
+
+
+def test_user_config_is_not_tracked_by_git():
+    """Sledovaný config.yaml působí konflikt při každé aktualizaci."""
+    import subprocess
+
+    tracked = subprocess.run(
+        ["git", "ls-files", "config/config.yaml"], capture_output=True, text=True,
+    ).stdout.strip()
+    assert tracked == "", "config/config.yaml nesmí být verzovaný"
+    assert "config/config.yaml" in Path(".gitignore").read_text(encoding="utf-8")

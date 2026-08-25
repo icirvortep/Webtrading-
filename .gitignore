@@ -3,6 +3,9 @@ __pycache__/
 .venv/
 venv/
 .env
+# Vlastní nastavení — vyrobí se z config.example.yaml při prvním spuštění.
+# Sledovat ho v gitu by znamenalo konflikt při každé aktualizaci.
+config/config.yaml
 data/
 *.sqlite
 *.sqlite-journal

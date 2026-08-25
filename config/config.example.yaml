@@ -23,7 +23,7 @@ exchange:
   # spot  = nákup a prodej aktiva; POVINNÉ pro Bybit EU, který deriváty nemá.
   #         Na spotu bot automaticky: páka 1x, žádné shorty, SL/TP hlídá sám.
   account_type: swap
-  quote: USDT
+  quote: USDT              # měna, ve které máš na burze peníze (USDT, USDC…)
   testnet: true             # NEJDŘÍV testnet, teprve pak reálné peníze
   api_key_env: EXCHANGE_API_KEY
   api_secret_env: EXCHANGE_API_SECRET
@@ -115,7 +115,10 @@ exits:
 # tickery seřadí celou burzu, a hloubkově se analyzuje jen špička žebříčku.
 universe:
   enabled: true
-  quote: USDT
+  # V jakých kotačních měnách hledat trhy. Prázdné = použije se exchange.quote.
+  # Přidat další měnu má smysl jen tehdy, když ji na burze skutečně držíš —
+  # za USDC se USDT pár nekoupí.
+  quotes: []
   min_volume_24h: 50000000.0      # pod tímto 24h objemem je kniha moc mělká
   adaptive_filters: true          # když práh vyřadí (skoro) všechno — typicky
                                   # na menší burze — vezme se místo něj prostě
