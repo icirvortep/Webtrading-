@@ -81,3 +81,26 @@ def test_venues_command_lists_exchanges(capsys):
     output = capsys.readouterr().out
     assert "bybit" in output
     assert "Max páka" in output
+
+
+def test_preflight_stops_when_keys_are_missing(capsys, monkeypatch, clean_env):
+    """Bez klíčů musí skončit hned a říct, který řádek v .env chybí."""
+    monkeypatch.delenv("EXCHANGE_API_KEY", raising=False)
+    monkeypatch.delenv("EXCHANGE_API_SECRET", raising=False)
+    assert main(["preflight"]) == 1
+    output = capsys.readouterr().out
+    assert "EXCHANGE_API_KEY" in output
+    assert "✗" in output
+
+
+def test_preflight_reports_unsupported_market_type(capsys, monkeypatch, clean_env, tmp_path):
+    """Bybit EU + perpetuály musí padnout na kontrole, ne až u obchodu."""
+    monkeypatch.setenv("EXCHANGE_API_KEY", "k")
+    monkeypatch.setenv("EXCHANGE_API_SECRET", "s")
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "exchange:\n  id: bybiteu\n  account_type: swap\n  testnet: false\n",
+        encoding="utf-8",
+    )
+    assert main(["--config", str(cfg), "preflight"]) == 1
+    assert "nenabízí typ trhu" in capsys.readouterr().out

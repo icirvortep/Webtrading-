@@ -198,8 +198,18 @@ class CCXTExchange(Exchange):
             req["reduceOnly"] = True
         if self.cfg.hedge_mode:
             req.setdefault("positionIdx", 1 if side is Side.LONG else 2)
+
+        # U spotového tržního NÁKUPU očekává burza množství v kotační měně
+        # (kolik utratit), ne v mincích. Bez ceny by se naše základní množství
+        # tiše vzalo jako částka v USDT — "kup 250 DOGE" by znamenalo
+        # "utrať 250 USDT". Cenu proto předáváme vždy, ať je převod jednoznačný.
+        price = self._market_buy_price(symbol) if self._needs_buy_price(side, reduce_only) else None
+
+        if self._needs_buy_price(side, reduce_only) and price is None:
+            return OrderResult(ok=False, error=f"neznámá cena pro {symbol}, nákup neodeslán")
+
         try:
-            order = self.client.create_order(symbol, "market", order_side, quantity, None, req)
+            order = self.client.create_order(symbol, "market", order_side, quantity, price, req)
         except Exception as exc:  # chybu neřešíme tady — předáváme ji routeru
             log.error("Market order %s %s %s selhal: %s", symbol, order_side, quantity, exc)
             return OrderResult(ok=False, error=str(exc))
@@ -208,6 +218,21 @@ class CCXTExchange(Exchange):
             filled_price=_opt_float(order.get("average") or order.get("price")),
             filled_qty=float(order.get("filled") or quantity), raw=order,
         )
+
+    def _needs_buy_price(self, side: Side, reduce_only: bool) -> bool:
+        return self.cfg.is_spot and side is Side.LONG and not reduce_only
+
+    def _market_buy_price(self, symbol: str) -> float | None:
+        """Aktuální cena pro přepočet množství na částku k utracení."""
+        try:
+            last = _opt_float(self.fetch_ticker(symbol).get("last"))
+        except Exception as exc:
+            log.error("Cena pro %s není dostupná, nákup neodesílám: %s", symbol, exc)
+            return None
+        if not last or last <= 0:
+            log.error("Neplatná cena pro %s, nákup neodesílám", symbol)
+            return None
+        return last
 
     def create_stop_loss(self, symbol: str, side: Side, quantity: float, stop_price: float) -> OrderResult:
         """SL je vždy reduce-only opačným směrem než pozice."""

@@ -73,6 +73,12 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--equity", type=float, default=10_000.0)
     demo.add_argument("--timeframe", default="15m")
 
+    preflight = sub.add_parser(
+        "preflight", help="prověří živé napojení na burzu dřív, než se začne obchodovat")
+    preflight.add_argument("--symbol", default=None, help="na kterém trhu zkoušet (jinak nejlepší z žebříčku)")
+    preflight.add_argument("--live-order", action="store_true",
+                           help="opravdu poslat nejmenší možný příkaz a hned ho zavřít")
+
     sub.add_parser("venues", help="přehled podporovaných burz a jejich páky")
     sub.add_parser("status", help="equity, otevřené pozice a statistika")
     sub.add_parser("close-all", help="uzavře všechny otevřené pozice")
@@ -103,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
 
     handlers = {
         "demo": cmd_demo,
+        "preflight": cmd_preflight,
         "venues": cmd_venues,
         "run": cmd_run,
         "status": cmd_status,
@@ -129,6 +136,108 @@ def main(argv: list[str] | None = None) -> int:
 
 
 # ---------- příkazy ----------
+
+def cmd_preflight(cfg: AppConfig, args: argparse.Namespace) -> int:
+    """Projde vše, co musí fungovat, než bot smí obchodovat za reálné peníze.
+
+    Smysl je odhalit potíže na klidném místě — chybějící oprávnění klíče, jiný
+    formát symbolu, minimum burzy — místo aby se ukázaly uprostřed obchodu.
+    """
+    from .exchanges.ccxt_adapter import CCXTExchange, ExchangeError
+
+    checks: list[tuple[bool, str]] = []
+
+    def check(ok: bool, label: str, detail: str = "") -> bool:
+        checks.append((ok, label))
+        mark = "✓" if ok else "✗"
+        print(f"  {mark} {label}" + (f"\n      {detail}" if detail else ""))
+        return ok
+
+    print("\n" + "=" * 66)
+    print(f"  KONTROLA ŽIVÉHO NAPOJENÍ — {cfg.exchange.id} ({cfg.exchange.account_type})")
+    print("=" * 66)
+
+    creds = cfg.exchange.credentials()
+    if not check(bool(creds.get("apiKey") and creds.get("secret")), "API klíče v prostředí",
+                 f"chybí {cfg.exchange.api_key_env} nebo {cfg.exchange.api_secret_env} v .env"):
+        return 1
+
+    try:
+        exchange = CCXTExchange(cfg.exchange)
+    except ExchangeError as exc:
+        check(False, "typ trhu podporován burzou", str(exc))
+        return 1
+    check(True, f"typ trhu '{cfg.exchange.account_type}' burza podporuje")
+
+    try:
+        exchange.load_markets()
+        symbols = exchange.list_symbols(cfg.exchange.quote)
+    except Exception as exc:
+        check(False, "načtení seznamu trhů", str(exc))
+        return 1
+    if not check(bool(symbols), "seznam trhů", f"nalezeno {len(symbols)} trhů v {cfg.exchange.quote}"):
+        return 1
+    print(f"      příklad: {', '.join(symbols[:4])}")
+
+    try:
+        balance = exchange.fetch_balance()
+    except Exception as exc:
+        check(False, "čtení zůstatku (oprávnění klíče)",
+              f"{exc}\n      Klíč nejspíš nemá právo číst účet, nebo je vázaný na jinou IP.")
+        return 1
+    check(True, "čtení zůstatku — klíč funguje",
+          f"{balance.equity:.2f} {balance.currency} (volné {balance.free:.2f})")
+
+    symbol = args.symbol or (symbols[0] if symbols else None)
+    limits = exchange.market_limits(symbol)
+    price = float(exchange.fetch_ticker(symbol).get("last") or 0.0)
+    check(price > 0, f"tržní data pro {symbol}", f"cena {price:.6f}")
+
+    min_cost = max(limits.get("min_cost", 0.0), cfg.risk.min_notional_usd)
+    risk_amount = balance.equity * cfg.risk.risk_per_trade_pct / 100.0
+    print(f"\n  Při riziku {cfg.risk.risk_per_trade_pct} % vsadíš {risk_amount:.2f} "
+          f"{balance.currency} na obchod.")
+    print(f"  Minimum burzy pro {symbol}: {min_cost:.2f} {balance.currency}.")
+
+    # Se stopem kolem 2 % je hodnota pozice zhruba padesátinásobek rizika.
+    typical_notional = risk_amount * 50
+    check(typical_notional >= min_cost, "velikost obchodu nad minimem burzy",
+          f"typická pozice ~{typical_notional:.2f} {balance.currency}"
+          + ("" if typical_notional >= min_cost else
+             " — navyš vklad, nebo zvedni risk_per_trade_pct"))
+
+    if args.live_order:
+        print("\n  --- ZKUŠEBNÍ PŘÍKAZ ZA REÁLNÉ PENÍZE ---")
+        quantity = exchange.amount_to_precision(symbol, (min_cost * 1.1) / price)
+        answer = input(f"  Koupit {quantity} {symbol} (~{quantity * price:.2f} "
+                       f"{balance.currency}) a hned prodat? [ano/ne]: ").strip().lower()
+        if answer != "ano":
+            print("  Přeskočeno.")
+        else:
+            from .models import Side
+
+            bought = exchange.create_market_order(symbol, Side.LONG, quantity)
+            if not check(bought.ok, "nákup prošel", bought.error or
+                         f"plnění {bought.filled_qty} @ {bought.filled_price}"):
+                return 1
+            sold = exchange.create_market_order(symbol, Side.SHORT, bought.filled_qty or quantity)
+            check(sold.ok, "prodej prošel", sold.error or
+                  f"plnění {sold.filled_qty} @ {sold.filled_price}")
+            print("      (rozdíl proti vkladu jsou poplatky za obě strany)")
+
+    failed = [label for ok, label in checks if not ok]
+    print("\n" + "=" * 66)
+    if failed:
+        print(f"  NEPROŠLO: {len(failed)} z {len(checks)} — {', '.join(failed)}")
+        print("=" * 66 + "\n")
+        return 1
+    print(f"  Vše prošlo ({len(checks)} kontrol).")
+    if not args.live_order:
+        print("  Poslední jistota: `atb preflight --live-order` pošle jeden")
+        print("  nejmenší možný reálný příkaz a hned ho zavře.")
+    print("=" * 66 + "\n")
+    return 0
+
 
 def cmd_venues(cfg: AppConfig, args: argparse.Namespace) -> int:
     print(registry.table())

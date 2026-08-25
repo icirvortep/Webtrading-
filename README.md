@@ -28,7 +28,7 @@ podle aktuálního režimu trhu a odešle příkazy na burzu s pákovým obchodo
 | **Živé rozhraní** | Webový dashboard: co robot vidí, proč vstoupil, pozice, historie — a nastavení všeho za běhu |
 | **Autopilot** | Vlastní generátor signálů — funguje bez TradingView i bez veřejné adresy |
 | **Výběr trhů** | Robot si vybírá ze **všech perpetual kontraktů na burze**, ne z pevného seznamu |
-| **Provoz** | Aplikace pro macOS s ikonou, offline režim, paper broker, backtest, Telegram notifikace, Docker, 208 testů |
+| **Provoz** | Aplikace pro macOS s ikonou, offline režim, paper broker, backtest, Telegram notifikace, Docker, 217 testů |
 
 ---
 
@@ -158,7 +158,7 @@ python -m atb venues                          # přehled burz a jejich páky
 python -m atb analyze BTC/USDT:USDT            # rozbor trhu: režim, skóre, návrh SL/TP
 python -m atb backtest BTC/USDT:USDT --limit 1500
 python -m atb run                              # webhook server v paper režimu
-pytest                                         # 208 testů
+pytest                                         # 217 testů
 ```
 
 Server pak poslouchá na `http://localhost:8080/webhook/tradingview`.
@@ -386,7 +386,28 @@ universe:
 > místo něj vezme nejlikvidnější špičku a napíše do logu, co udělal —
 > neskončí naprázdno. Vypnout to jde přes `universe.adaptive_filters: false`.
 
-### 4. Postup zapnutí
+### 4. Kontrola před ostrým provozem
+
+Než pustíš živé obchodování, ověř celý řetězec jedním příkazem:
+
+```bash
+cd ~/AdaptiveTradingBot && PYTHONPATH=src .venv/bin/python -m atb preflight
+```
+
+Projde: klíče v `.env`, podporu typu trhu, načtení trhů, **oprávnění klíče**
+(čtení zůstatku), tržní data a jestli tvůj vklad stačí na minimum burzy.
+Každý bod vypíše ✓ nebo ✗ s vysvětlením.
+
+Poslední jistota — pošle **jeden nejmenší možný reálný příkaz** a hned ho zavře:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m atb preflight --live-order
+```
+
+Stojí to poplatky za dvě strany (pár centů) a je to jediný způsob, jak před
+prvním ostrým obchodem ověřit, že burza příkazy v našem tvaru opravdu přijme.
+
+### 5. Postup zapnutí
 
 ```
 1) PAPER na reálných datech   ← nech běžet dny, sleduj záložku Rozhodnutí
@@ -499,7 +520,7 @@ start-mac.command              spuštění bez instalace
 ## Testy
 
 ```bash
-pytest                      # 208 testů, běží bez sítě proti falešné burze
+pytest                      # 217 testů, běží bez sítě proti falešné burze
 pytest --cov=src/atb        # s pokrytím
 ruff check src tests scripts   # lint
 ```
