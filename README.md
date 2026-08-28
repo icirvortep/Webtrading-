@@ -28,11 +28,24 @@ podle aktuálního režimu trhu a odešle příkazy na burzu s pákovým obchodo
 | **Živé rozhraní** | Webový dashboard: co robot vidí, proč vstoupil, pozice, historie — a nastavení všeho za běhu |
 | **Autopilot** | Vlastní generátor signálů — funguje bez TradingView i bez veřejné adresy |
 | **Výběr trhů** | Robot si vybírá ze **všech perpetual kontraktů na burze**, ne z pevného seznamu |
-| **Provoz** | Aplikace pro macOS s ikonou, offline režim, paper broker, backtest, Telegram notifikace, Docker, 236 testů |
+| **Provoz** | Aplikace pro macOS s ikonou, offline režim, paper broker, backtest, Telegram notifikace, Docker, 240 testů |
 
 ---
 
-## Instalace na MacBook
+## Instalace na MacBook — bez terminálu
+
+1. Stáhni ZIP:
+   [Adaptive Trading Bot](https://github.com/icirvortep/Webtrading-/archive/refs/heads/claude/tradingview-auto-trading-bot-iqmukq.zip)
+2. Safari ho rozbalí sám. Složku přetáhni, kam chceš.
+3. V ní **pravým tlačítkem** na `start-mac.command` → *Otevřít* → *Otevřít*.
+
+Aplikace si při prvním spuštění doinstaluje, co potřebuje, a když už máš starší
+instalaci, **sama si z ní přenese API klíče** — nevypisuješ je znovu.
+
+Nevýhoda téhle cesty: bez gitu se aplikace nebude sama aktualizovat. Chceš-li
+i automatické aktualizace, použij instalaci přes git níž.
+
+## Instalace na MacBook — přes git (s automatickými aktualizacemi)
 
 Otevři **Terminál** (Cmd+mezerník → napiš „Terminál“) a vlož tyhle dva řádky:
 
@@ -159,7 +172,7 @@ python -m atb venues                          # přehled burz a jejich páky
 python -m atb analyze BTC/USDT:USDT            # rozbor trhu: režim, skóre, návrh SL/TP
 python -m atb backtest BTC/USDT:USDT --limit 1500
 python -m atb run                              # webhook server v paper režimu
-pytest                                         # 236 testů
+pytest                                         # 240 testů
 ```
 
 Server pak poslouchá na `http://localhost:8080/webhook/tradingview`.
@@ -535,7 +548,7 @@ start-mac.command              spuštění bez instalace
 ## Testy
 
 ```bash
-pytest                      # 236 testů, běží bez sítě proti falešné burze
+pytest                      # 240 testů, běží bez sítě proti falešné burze
 pytest --cov=src/atb        # s pokrytím
 ruff check src tests scripts   # lint
 ```

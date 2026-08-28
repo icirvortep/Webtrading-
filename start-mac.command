@@ -81,7 +81,35 @@ update_repo() {
 [ "${ATB_SKIP_UPDATE:-}" = "1" ] || update_repo
 
 # --- konfigurace ---
-[ -f .env ] || { cp .env.example .env; say "$YELLOW" "Vytvořen soubor .env — API klíče doplň až budeš chtít obchodovat."; }
+# Klíče v .env jsou to jediné, co se nedá stáhnout z gitu. Když si uživatel
+# přenese projekt jinam, hledáme je v předchozích instalacích, ať je nemusí
+# vypisovat znovu (a ať neskončí v chatu nebo v e-mailu).
+has_keys() {
+  [ -f "$1" ] && grep -qE '^EXCHANGE_API_KEY=.+' "$1"
+}
+
+migrate_env() {
+  has_keys .env && return 0
+  local candidate
+  for candidate in \
+      "$HOME/AdaptiveTradingBot/.env" \
+      "$HOME/Desktop"/*/.env \
+      "$HOME/Desktop"/*/bot/.env \
+      "$HOME/Documents"/*/.env; do
+    [ "$candidate" = "$(pwd)/.env" ] && continue
+    if has_keys "$candidate"; then
+      cp "$candidate" .env
+      say "$GREEN" "Našel jsem tvoje API klíče v $(dirname "$candidate") a přenesl je sem."
+      return 0
+    fi
+  done
+  return 1
+}
+
+[ -f .env ] || cp .env.example .env
+if ! has_keys .env; then
+  migrate_env || say "$YELLOW" "API klíče zatím nejsou vyplněné — v režimech OFFLINE a PAPER je nepotřebuješ."
+fi
 [ -f config/config.yaml ] || cp config/config.example.yaml config/config.yaml
 
 # --- volba režimu ---

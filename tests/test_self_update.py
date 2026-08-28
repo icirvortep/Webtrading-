@@ -139,3 +139,81 @@ def test_launcher_allows_disabling_the_update():
 def test_update_never_runs_git_clean():
     """git clean by smazal .env s klíči — nesmí se ve spouštěči objevit."""
     assert "git clean" not in LAUNCHER.read_text(encoding="utf-8")
+
+
+# ---------- přenos API klíčů mezi instalacemi ----------
+
+def extract_env_migration() -> str:
+    """Vytáhne ze spouštěče část, která hledá klíče v předchozích instalacích."""
+    text = LAUNCHER.read_text(encoding="utf-8")
+    start = text.index("has_keys() {")
+    # značka musí být jednoznačná — podobný řádek je i v aktualizaci výš
+    end = text.index("[ -f config/config.yaml ] || cp config/config.example.yaml")
+    return ("#!/bin/bash\nGREEN=''; YELLOW=''\nsay() { printf '%s\\n' \"$2\"; }\n"
+            + text[start:end])
+
+
+def run_migration(cwd: Path, home: Path) -> str:
+    script = cwd / "_migrate.sh"
+    script.write_text(extract_env_migration(), encoding="utf-8")
+    result = subprocess.run(
+        ["bash", str(script)], cwd=cwd, capture_output=True, text=True,
+        env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+    )
+    script.unlink()
+    return result.stdout + result.stderr
+
+
+@pytest.fixture()
+def fresh_install(tmp_path):
+    """Čerstvě stažená kopie bez .env, plus domovský adresář."""
+    home = tmp_path / "home"
+    (home / "Desktop").mkdir(parents=True)
+    (home / "Documents").mkdir()
+    install = home / "Desktop" / "Adaptive Trading" / "bot"
+    install.mkdir(parents=True)
+    (install / ".env.example").write_text(
+        "EXCHANGE_API_KEY=\nEXCHANGE_API_SECRET=\n", encoding="utf-8")
+    return install, home
+
+
+def test_keys_are_carried_over_from_the_previous_install(fresh_install):
+    """Přenesení projektu jinam nesmí znamenat opisování klíčů z burzy."""
+    install, home = fresh_install
+    old = home / "AdaptiveTradingBot"
+    old.mkdir()
+    (old / ".env").write_text(
+        "EXCHANGE_API_KEY=klic123\nEXCHANGE_API_SECRET=secret456\n", encoding="utf-8")
+
+    output = run_migration(install, home)
+    assert "přenesl" in output
+    assert "klic123" in (install / ".env").read_text(encoding="utf-8")
+
+
+def test_existing_keys_are_never_overwritten(fresh_install):
+    install, home = fresh_install
+    (install / ".env").write_text("EXCHANGE_API_KEY=uz_tady_je\n", encoding="utf-8")
+    old = home / "AdaptiveTradingBot"
+    old.mkdir()
+    (old / ".env").write_text("EXCHANGE_API_KEY=stary\n", encoding="utf-8")
+
+    run_migration(install, home)
+    assert "uz_tady_je" in (install / ".env").read_text(encoding="utf-8")
+
+
+def test_empty_previous_keys_are_not_migrated(fresh_install):
+    """Prázdná šablona se nesmí tvářit jako nalezené klíče."""
+    install, home = fresh_install
+    old = home / "AdaptiveTradingBot"
+    old.mkdir()
+    (old / ".env").write_text("EXCHANGE_API_KEY=\nEXCHANGE_API_SECRET=\n", encoding="utf-8")
+
+    output = run_migration(install, home)
+    assert "nejsou vyplněné" in output
+
+
+def test_missing_previous_install_is_explained_not_fatal(fresh_install):
+    install, home = fresh_install
+    output = run_migration(install, home)
+    assert "nejsou vyplněné" in output
+    assert (install / ".env").exists()          # šablona se přesto vytvoří
